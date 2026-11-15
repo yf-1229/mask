@@ -23,9 +23,11 @@ Two ways an envelope becomes permanently undecryptable:
   without an expiry are refused too.
 - 認証失敗: the gateway counts failed passphrase attempts per envelope
   (keyed by envelope_fingerprint) and locks an envelope for good after
-  the configured limit. This bounds online guessing through the gateway;
-  offline guessing against a copied envelope is mitigated by the argon2id
-  cost, the passphrase strength, and the expiry window.
+  the configured limit. On top of that the gateway marks an envelope
+  consumed after a successful import (single use). These bound online
+  guessing through the gateway; offline guessing against a copied
+  envelope is mitigated by the argon2id cost, the passphrase strength,
+  and the short expiry window.
 """
 
 from __future__ import annotations
@@ -38,12 +40,17 @@ import time
 from nacl import pwhash, secret, utils as nacl_utils
 
 ENVELOPE_VERSION = 1
-# Interactive-grade argon2id (~64 MiB, ~0.1 s per seal/unseal).
-KDF_OPSLIMIT = pwhash.argon2id.OPSLIMIT_INTERACTIVE
-KDF_MEMLIMIT = pwhash.argon2id.MEMLIMIT_INTERACTIVE
+# Moderate-grade argon2id (~256 MiB, ~0.3 s per seal/unseal). Handoffs are
+# rare and re-export is cheap, so we spend real cost here: this is the
+# only thing slowing offline passphrase guessing against a copied
+# envelope. The envelope carries its own parameters, so future raises
+# do not invalidate old files.
+KDF_OPSLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE
+KDF_MEMLIMIT = pwhash.argon2id.MEMLIMIT_MODERATE
 
-# Default envelope lifetime: 24 h.
-DEFAULT_TTL_SECONDS = 24 * 3600
+# Default envelope lifetime: 1 h. A handoff is a minutes-scale operation;
+# if it expires, export again.
+DEFAULT_TTL_SECONDS = 3600
 
 
 class EnvelopeExpired(ValueError):

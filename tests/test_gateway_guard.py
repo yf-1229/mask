@@ -27,6 +27,9 @@ def _make_client(tmp_path, dictionary_terms=None, **overrides):
         use_ner=False,
         dictionary_path=dictionary_path,
         session_scope="global",
+        # TestClient's client host is "testclient", not loopback; admin
+        # tests opt in explicitly where needed.
+        admin_allow_remote=True,
     )
     kwargs.update(overrides)
     config = GatewayConfig(**kwargs)

@@ -43,8 +43,11 @@ class GatewayConfig:
     leak_gate: str = "block"
     # Encrypted handoff: envelope lifetime and failed-passphrase attempts
     # before the envelope is locked for good (per envelope, in-process).
-    handoff_ttl_seconds: int = 24 * 3600
+    handoff_ttl_seconds: int = 3600
     handoff_max_attempts: int = 3
+    # Admin endpoints (export/import) accept loopback clients only unless
+    # this is set. The envelope file travels, not the admin API.
+    admin_allow_remote: bool = False
 
     def __post_init__(self) -> None:
         if self.session_scope not in ("global", "request"):
@@ -59,6 +62,8 @@ class GatewayConfig:
             raise ValueError("gateway.handoff_ttl_seconds must be a positive integer")
         if not isinstance(self.handoff_max_attempts, int) or self.handoff_max_attempts < 1:
             raise ValueError("gateway.handoff_max_attempts must be >= 1")
+        if not isinstance(self.admin_allow_remote, bool):
+            raise ValueError("gateway.admin_allow_remote must be a boolean")
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "GatewayConfig":
@@ -87,10 +92,9 @@ class GatewayConfig:
                 gateway.get("passthrough_allowlist", DEFAULT_PASSTHROUGH_ALLOWLIST)
             ),
             leak_gate=gateway.get("leak_gate", "block"),
-            handoff_ttl_seconds=int(
-                gateway.get("handoff_ttl_seconds", 24 * 3600)
-            ),
+            handoff_ttl_seconds=int(gateway.get("handoff_ttl_seconds", 3600)),
             handoff_max_attempts=int(gateway.get("handoff_max_attempts", 3)),
+            admin_allow_remote=bool(gateway.get("admin_allow_remote", False)),
         )
 
         if os.environ.get("MASK_SERVER_HOST"):
@@ -109,6 +113,10 @@ class GatewayConfig:
             cfg.handoff_ttl_seconds = int(os.environ["MASK_HANDOFF_TTL_SECONDS"])
         if os.environ.get("MASK_HANDOFF_MAX_ATTEMPTS"):
             cfg.handoff_max_attempts = int(os.environ["MASK_HANDOFF_MAX_ATTEMPTS"])
+        if os.environ.get("MASK_ADMIN_ALLOW_REMOTE"):
+            cfg.admin_allow_remote = (
+                os.environ["MASK_ADMIN_ALLOW_REMOTE"].lower() in ("1", "true", "yes")
+            )
         return cfg
 
     @staticmethod

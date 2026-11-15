@@ -23,6 +23,7 @@ Phase A scope:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 from typing import Any
@@ -199,10 +200,12 @@ def create_app(
         else UserDictionary()
     )
     app.state.dictionary = dictionary
-    # Failed-passphrase attempts per envelope fingerprint (lockout state).
-    # Process-local by design: restarting the gateway resets counters, but
-    # the sealed expiry still bounds the envelope's life.
+    # Handoff state, process-local by design: failed-passphrase attempts
+    # per envelope fingerprint, and fingerprints of consumed (single-use)
+    # envelopes. Restarting the gateway resets these, but the sealed
+    # expiry still bounds every envelope's life.
     app.state.handoff_failures: dict[str, int] = {}
+    app.state.handoff_consumed: set[str] = set()
     if config.session_scope == "global":
         # NER model loads once here, not per request.
         app.state.session = Session(dictionary=dictionary, use_ner=config.use_ner)
@@ -213,10 +216,16 @@ def create_app(
         return Session(dictionary=dictionary, use_ner=config.use_ner)
 
     def _authorized(request: Request) -> Response | None:
-        """Gateway token check; unset token means no auth (localhost only)."""
+        """Gateway token check; unset token means no auth (localhost only).
+
+        The comparison is constant-time: the token is a long-lived shared
+        secret, so no early-exit string comparison.
+        """
         if not config.gateway_token:
             return None
-        if request.headers.get("authorization") == f"Bearer {config.gateway_token}":
+        expected = f"Bearer {config.gateway_token}".encode("utf-8")
+        provided = request.headers.get("authorization", "").encode("utf-8")
+        if hmac.compare_digest(provided, expected):
             return None
         return JSONResponse(
             status_code=401,
@@ -285,7 +294,9 @@ def create_app(
         )
 
     def _admin_authorized(request: Request) -> Response | None:
-        """Admin endpoints stay disabled until gateway.token is set."""
+        """Admin endpoints: disabled without a token, loopback-only by
+        default. The envelope file travels between teammates; the admin
+        API itself never needs to be reachable from the network."""
         if not config.gateway_token:
             return JSONResponse(
                 status_code=403,
@@ -296,6 +307,22 @@ def create_app(
                     }
                 },
             )
+        if not config.admin_allow_remote:
+            host = request.client.host if request.client else ""
+            if host not in ("127.0.0.1", "::1", "localhost"):
+                logger.warning("admin refused from non-loopback client: %s", host)
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": {
+                            "message": (
+                                "admin endpoints accept loopback clients only "
+                                "(set gateway.admin_allow_remote to override)"
+                            ),
+                            "code": "mask_admin_local_only",
+                        }
+                    },
+                )
         return _authorized(request)
 
     @app.get("/healthz")
@@ -375,11 +402,12 @@ def create_app(
         This completes the handoff in the receiving process: after import,
         the same values mask to the same tokens and imported artifacts
         restore. Security posture: a sealed expiry (時間切れ) refuses
-        decryption outright, and failed passphrase attempts (認証失敗) are
+        decryption outright, failed passphrase attempts (認証失敗) are
         counted per envelope — at the configured limit the envelope is
-        locked for good, even for the correct passphrase. Token clashes
-        with different values are never rebound; they are reported as
-        conflicts.
+        locked for good, even for the correct passphrase — and a
+        successful import consumes the envelope (single use). Token
+        clashes with different values are never rebound; they are
+        reported as conflicts.
         """
         denied = _admin_authorized(request)
         if denied is not None:
@@ -400,6 +428,20 @@ def create_app(
             return _bad_request("malformed envelope")
 
         fingerprint = envelope_fingerprint(envelope)
+        if fingerprint in app.state.handoff_consumed:
+            logger.warning("admin import: envelope consumed (fp %s)", fingerprint[:12])
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "error": {
+                        "message": (
+                            "envelope already imported; single use — "
+                            "request a fresh export"
+                        ),
+                        "code": "mask_envelope_consumed",
+                    }
+                },
+            )
         failures = app.state.handoff_failures
         if failures.get(fingerprint, 0) >= config.handoff_max_attempts:
             logger.warning("admin import: envelope locked (fp %s)", fingerprint[:12])
@@ -463,7 +505,7 @@ def create_app(
             )
         failures.pop(fingerprint, None)
         records = payload.get("records") if isinstance(payload, dict) else None
-        if not isinstance(records, list):
+        if payload.get("v") != 1 or not isinstance(records, list):
             return _bad_request("envelope payload has no records")
         counts = {"imported": 0, "already": 0, "conflict": 0, "invalid": 0}
         conflicts: list[str] = []
@@ -471,13 +513,23 @@ def create_app(
             if not isinstance(rec, dict):
                 counts["invalid"] += 1
                 continue
+            token = rec.get("token")
+            value = rec.get("value")
+            if not isinstance(token, str) or not isinstance(value, str):
+                counts["invalid"] += 1
+                continue
+            try:
+                occurrences = int(rec.get("occurrences", 0))
+            except (TypeError, ValueError):
+                occurrences = 0
             status = app.state.session.pseudonyms.import_record(
-                rec.get("token", ""), rec.get("value", ""),
-                int(rec.get("occurrences", 0)),
+                token, value, occurrences
             )
             counts[status] += 1
             if status == "conflict":
-                conflicts.append(rec.get("token", ""))
+                conflicts.append(token)
+        # single use: this envelope will never import again
+        app.state.handoff_consumed.add(fingerprint)
         logger.info("admin import: %s", counts)  # counts only, never values
         return JSONResponse({"result": counts, "conflicts": conflicts})
 

@@ -345,7 +345,7 @@ def test_lockout_is_per_envelope(tmp_path):
     assert resp.json()["result"]["imported"] == 1
 
 
-def test_successful_import_resets_attempt_counter(tmp_path):
+def test_successful_import_consumes_envelope(tmp_path):
     src_client, _ = _make_client(
         tmp_path, [("山田太郎", "person")], gateway_token="team-secret"
     )
@@ -355,18 +355,40 @@ def test_successful_import_resets_attempt_counter(tmp_path):
     ).json()["envelope"]
 
     dst_client, _ = _make_client(tmp_path, gateway_token="team-secret")
-    dst_client.post(
-        "/admin/import", json={"passphrase": "wrong", "envelope": envelope}, headers=AUTH
-    )
     resp = dst_client.post(
         "/admin/import", json={"passphrase": "p", "envelope": envelope}, headers=AUTH
     )
     assert resp.status_code == 200
+    # single use: even the correct passphrase cannot import it again
     resp = dst_client.post(
-        "/admin/import", json={"passphrase": "wrong", "envelope": envelope}, headers=AUTH
+        "/admin/import", json={"passphrase": "p", "envelope": envelope}, headers=AUTH
     )
-    assert resp.status_code == 400
-    assert resp.json()["error"]["attempts_remaining"] == 2  # counter was reset
+    assert resp.status_code == 410
+    assert resp.json()["error"]["code"] == "mask_envelope_consumed"
+
+
+def test_admin_refuses_non_loopback_client(tmp_path):
+    """Default posture: admin endpoints are loopback-only, so a client
+    arriving over the network (TestClient's host is "testclient") is
+    refused even with the right token."""
+    client, _ = _make_client(
+        tmp_path,
+        [("山田太郎", "person")],
+        gateway_token="team-secret",
+        admin_allow_remote=False,
+    )
+    resp = client.post(
+        "/admin/export", json={"passphrase": "p"}, headers=AUTH
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "mask_admin_local_only"
+    resp = client.post(
+        "/admin/import",
+        json={"passphrase": "p", "envelope": {}},
+        headers=AUTH,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "mask_admin_local_only"
 
 
 def test_single_attempt_policy(tmp_path):
@@ -416,6 +438,23 @@ def test_admin_rejects_request_scope(tmp_path):
     resp = client.post("/admin/export", json={"passphrase": "x"}, headers=AUTH)
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "mask_scope_unsupported"
+
+
+# --- security posture defaults -------------------------------------------------
+
+
+def test_kdf_cost_is_moderate():
+    """Offline guessing pays 256 MiB per attempt; a regression to a
+    cheaper grade must fail loudly."""
+    assert sharing.KDF_OPSLIMIT == pwhash.argon2id.OPSLIMIT_MODERATE
+    assert sharing.KDF_MEMLIMIT == pwhash.argon2id.MEMLIMIT_MODERATE
+
+
+def test_default_ttl_is_one_hour():
+    assert sharing.DEFAULT_TTL_SECONDS == 3600
+    assert GatewayConfig().handoff_ttl_seconds == 3600
+    assert GatewayConfig().handoff_max_attempts == 3
+    assert GatewayConfig().admin_allow_remote is False
 
 
 # --- config -----------------------------------------------------------------

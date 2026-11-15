@@ -23,5 +23,6 @@ scope = "global"   # "global" | "request"
                                   # /admin/export・/admin/import の認証にも使う
 passthrough_allowlist = ["/v1/models"]   # 他のパスはすべて 403 で拒否
 leak_gate = "block"              # "block": 実値の残存を検出したら送信拒否 / "warn": ログのみ
-handoff_ttl_seconds = 86400      # 封筒の有効期限(秒)。期限後は復号不可能
+handoff_ttl_seconds = 3600       # 封筒の有効期限(秒)。期限後は復号不可能
 handoff_max_attempts = 3        # パスフレーズ誤り回数。超えたらその封筒は恒久ロック
+admin_allow_remote = false       # export/import は localhost からのみ(true で解除)
