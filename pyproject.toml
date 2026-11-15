@@ -11,6 +11,9 @@ dependencies = [
     "ja_ginza>=5.2",
 ]
 
+[project.scripts]
+mask-server = "mask.gateway:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

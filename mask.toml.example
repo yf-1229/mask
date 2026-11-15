@@ -1,0 +1,18 @@
+# mask gateway configuration
+# copy to mask.toml and edit. environment variables override this file:
+#   MASK_SERVER_HOST / MASK_SERVER_PORT / MASK_UPSTREAM_BASE_URL / MASK_UPSTREAM_API_KEY
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[upstream]
+base_url = "https://api.openai.com/v1"
+api_key = ""
+
+[mask]
+use_ner = true
+# dictionary = "dictionary.tsv"   # TSV: <term>\t<type>
+
+[session]
+scope = "global"   # "global" | "request"
