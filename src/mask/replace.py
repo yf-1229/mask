@@ -71,11 +71,16 @@ class PseudonymMap:
             j = secrets.randbelow(i + 1)
             self._pool[i], self._pool[j] = self._pool[j], self._pool[i]
         self._records: dict[tuple[EntityType, str], TokenRecord] = {}
+        # Every raw value ever assigned (NFKC keys), containment variants
+        # included. Consumed by the gateway's outbound leak gate; like the
+        # rest of the table it never leaves the process.
+        self._seen: set[str] = set()
 
     def assign(self, etype: EntityType, raw_value: str) -> TokenRecord:
         """Get-or-create the token for an entity occurrence, unifying
         containment variants (substring containment => same token)."""
         key_value = normalize_key(raw_value)
+        self._seen.add(key_value)
         records = [r for (t, _), r in self._records.items() if t == etype]
         for rec in records:
             rec_key = normalize_key(rec.value)
@@ -106,6 +111,10 @@ class PseudonymMap:
 
     def tokens(self) -> list[str]:
         return [rec.token for rec in self._records.values()]
+
+    def raw_values(self) -> set[str]:
+        """NFKC-normalized raw values seen this session, variants included."""
+        return set(self._seen)
 
     def records(self) -> list[TokenRecord]:
         return list(self._records.values())

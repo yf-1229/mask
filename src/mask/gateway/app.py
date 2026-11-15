@@ -10,11 +10,19 @@ Phase A scope:
 - /v1/chat/completions with stream=true: the upstream SSE stream is
   buffered to completion, restored as a whole, and returned as a single
   SSE chunk. Correct but not incremental; incremental restore is Phase B.
-- Every other /v1/* path is forwarded verbatim (no PII expected there).
+- tool_calls function arguments are masked (JSON strings are parsed and
+  every string inside is masked).
+- Every other path is refused unless allowlisted in gateway config
+  (deny by default); allowlisted paths are forwarded but still pass the
+  outbound leak gate.
+- Before anything is sent, the outbound leak gate walks the payload and
+  forwarded headers for raw values the session has detected; a hit
+  refuses the request (fail closed). See leakguard.py.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any
@@ -25,6 +33,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from mask.detect.dictionary import UserDictionary
 from mask.gateway.config import GatewayConfig
+from mask.gateway.leakguard import find_header_leaks, find_leaks
 from mask.pipeline import Session
 
 logger = logging.getLogger("mask.gateway")
@@ -68,19 +77,61 @@ def _mask_content(content: Any, session: Session) -> Any:
     return content
 
 
+def _mask_strings(node: Any, session: Session) -> Any:
+    """Mask every string inside a parsed JSON argument blob."""
+    if isinstance(node, str):
+        return _mask_text(node, session)
+    if isinstance(node, dict):
+        return {k: _mask_strings(v, session) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_mask_strings(v, session) for v in node]
+    return node
+
+
+def _mask_json_string(raw: str, session: Session) -> str:
+    """Mask a JSON-encoded string; non-JSON strings are masked as text."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _mask_text(raw, session)
+    return json.dumps(_mask_strings(parsed, session), ensure_ascii=False)
+
+
+def _mask_tool_calls(tool_calls: Any, session: Session) -> Any:
+    """Mask PII inside tool_calls[*].function.arguments."""
+    if not isinstance(tool_calls, list):
+        return tool_calls
+    out = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            out.append(call)
+            continue
+        fn = call.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+            call = {
+                **call,
+                "function": {
+                    **fn,
+                    "arguments": _mask_json_string(fn["arguments"], session),
+                },
+            }
+        out.append(call)
+    return out
+
+
 def mask_chat_request(body: dict[str, Any], session: Session) -> dict[str, Any]:
     """Return a copy of the request body with PII in messages replaced."""
     masked = dict(body)
     messages = masked.get("messages")
     if isinstance(messages, list):
-        masked["messages"] = [
-            (
-                {**m, "content": _mask_content(m.get("content"), session)}
-                if isinstance(m, dict)
-                else m
-            )
-            for m in messages
-        ]
+        out = []
+        for m in messages:
+            if isinstance(m, dict):
+                m = {**m, "content": _mask_content(m.get("content"), session)}
+                if "tool_calls" in m:
+                    m = {**m, "tool_calls": _mask_tool_calls(m["tool_calls"], session)}
+            out.append(m)
+        masked["messages"] = out
     return masked
 
 
@@ -150,6 +201,61 @@ def create_app(
             return app.state.session
         return Session(dictionary=dictionary, use_ner=config.use_ner)
 
+    def _authorized(request: Request) -> Response | None:
+        """Gateway token check; unset token means no auth (localhost only)."""
+        if not config.gateway_token:
+            return None
+        if request.headers.get("authorization") == f"Bearer {config.gateway_token}":
+            return None
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": {
+                    "message": "gateway token required (send it as the API key)",
+                    "code": "mask_unauthorized",
+                }
+            },
+        )
+
+    def _gate(
+        payload: Any, session: Session, headers: dict[str, str], source: str
+    ) -> Response | None:
+        """Refuse the request if a known raw value would leave the process.
+
+        The client-facing error echoes the offending values: the client is
+        the trusted local user and sent them in the first place. Logs carry
+        only field paths and a value hash, never the raw value.
+        """
+        values = session.pseudonyms.raw_values()
+        if not values:
+            return None
+        leaks = find_leaks(payload, values) + find_header_leaks(headers, values)
+        if not leaks:
+            return None
+        for leak in leaks:
+            logger.warning(
+                "leak gate: %s in %s (value sha256:%s)",
+                source,
+                leak.path,
+                hashlib.sha256(leak.value.encode("utf-8")).hexdigest()[:12],
+            )
+        if config.leak_gate == "warn":
+            return None
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": (
+                        "mask gateway: unmasked PII detected in the request; "
+                        "nothing was sent to the upstream"
+                    ),
+                    "code": "mask_leak_blocked",
+                    "fields": [leak.path for leak in leaks],
+                    "values": [leak.value for leak in leaks],
+                }
+            },
+        )
+
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
         return {
@@ -160,10 +266,16 @@ def create_app(
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
+        denied = _authorized(request)
+        if denied is not None:
+            return denied
         body = await request.json()
         session = get_session()
         masked = mask_chat_request(body, session)
         headers = _upstream_headers(request, config)
+        blocked = _gate(masked, session, headers, "chat/completions")
+        if blocked is not None:
+            return blocked
         url = "/chat/completions"
 
         if body.get("stream"):
@@ -185,17 +297,46 @@ def create_app(
         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     )
     async def passthrough(request: Request, path: str) -> Response:
-        """Forward anything else (e.g. /v1/models) verbatim, unmasked.
+        """Forward allowlisted paths verbatim; refuse everything else.
 
+        Deny by default: only paths in gateway.passthrough_allowlist reach
+        the upstream. Allowlisted bodies are not masked (their schemas are
+        not OpenAI chat), but they still pass the outbound leak gate, so a
+        known raw value refuses the request instead of leaving the machine.
         The local /v1 prefix is stripped because upstream_base_url already
         carries the version segment.
         """
-        if path.startswith("v1/"):
-            path = path[len("v1/"):]
-        headers = _upstream_headers(request, config)
+        denied = _authorized(request)
+        if denied is not None:
+            return denied
+        route = f"/{path}"
+        if route not in config.passthrough_allowlist:
+            logger.warning("passthrough denied: %s", route)
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "message": (
+                            f"path {route} is not allowlisted; add it to "
+                            "gateway.passthrough_allowlist if it must pass"
+                        ),
+                        "code": "mask_path_blocked",
+                    }
+                },
+            )
         body = await request.body()
+        headers = _upstream_headers(request, config)
+        if config.session_scope == "global":
+            try:
+                payload: Any = json.loads(body) if body else None
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                payload = body.decode("utf-8", "replace")
+            blocked = _gate(payload, app.state.session, headers, route)
+            if blocked is not None:
+                return blocked
+        forward = path[len("v1/"):] if path.startswith("v1/") else path
         upstream = await app.state.http.request(
-            request.method, f"/{path}", content=body, headers=headers
+            request.method, f"/{forward}", content=body, headers=headers
         )
         return Response(
             content=upstream.content,

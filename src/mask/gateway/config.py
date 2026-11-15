@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG_NAME = "mask.toml"
+
+# Paths (as seen by the client, "/v1/..." included) the gateway forwards
+# verbatim. Everything else is refused: deny by default.
+DEFAULT_PASSTHROUGH_ALLOWLIST = ["/v1/models"]
 
 
 @dataclass
@@ -27,11 +31,25 @@ class GatewayConfig:
     # "request": a fresh Session per request; lighter table but the LLM
     # cannot rely on pseudonyms from earlier turns.
     session_scope: str = "global"
+    # If set, clients must send it as their API key (Authorization: Bearer
+    # <token>). Distribute this instead of the real upstream key.
+    gateway_token: str = ""
+    # Client paths forwarded verbatim (leak-gated). Anything else: 403.
+    passthrough_allowlist: list[str] = field(
+        default_factory=lambda: list(DEFAULT_PASSTHROUGH_ALLOWLIST)
+    )
+    # Outbound leak gate: "block" refuses the request (fail closed),
+    # "warn" logs and sends anyway.
+    leak_gate: str = "block"
 
     def __post_init__(self) -> None:
         if self.session_scope not in ("global", "request"):
             raise ValueError(
                 f"session.scope must be 'global' or 'request', got {self.session_scope!r}"
+            )
+        if self.leak_gate not in ("block", "warn"):
+            raise ValueError(
+                f"gateway.leak_gate must be 'block' or 'warn', got {self.leak_gate!r}"
             )
 
     @classmethod
@@ -46,6 +64,7 @@ class GatewayConfig:
         upstream = data.get("upstream", {})
         mask = data.get("mask", {})
         session = data.get("session", {})
+        gateway = data.get("gateway", {})
 
         cfg = cls(
             host=server.get("host", cls.host),
@@ -55,6 +74,11 @@ class GatewayConfig:
             use_ner=bool(mask.get("use_ner", True)),
             dictionary_path=mask.get("dictionary"),
             session_scope=session.get("scope", "global"),
+            gateway_token=gateway.get("token", ""),
+            passthrough_allowlist=list(
+                gateway.get("passthrough_allowlist", DEFAULT_PASSTHROUGH_ALLOWLIST)
+            ),
+            leak_gate=gateway.get("leak_gate", "block"),
         )
 
         if os.environ.get("MASK_SERVER_HOST"):
@@ -65,6 +89,10 @@ class GatewayConfig:
             cfg.upstream_base_url = os.environ["MASK_UPSTREAM_BASE_URL"]
         if os.environ.get("MASK_UPSTREAM_API_KEY"):
             cfg.upstream_api_key = os.environ["MASK_UPSTREAM_API_KEY"]
+        if os.environ.get("MASK_GATEWAY_TOKEN"):
+            cfg.gateway_token = os.environ["MASK_GATEWAY_TOKEN"]
+        if os.environ.get("MASK_LEAK_GATE"):
+            cfg.leak_gate = os.environ["MASK_LEAK_GATE"]
         return cfg
 
     @staticmethod
