@@ -41,6 +41,10 @@ class GatewayConfig:
     # Outbound leak gate: "block" refuses the request (fail closed),
     # "warn" logs and sends anyway.
     leak_gate: str = "block"
+    # Encrypted handoff: envelope lifetime and failed-passphrase attempts
+    # before the envelope is locked for good (per envelope, in-process).
+    handoff_ttl_seconds: int = 24 * 3600
+    handoff_max_attempts: int = 3
 
     def __post_init__(self) -> None:
         if self.session_scope not in ("global", "request"):
@@ -51,6 +55,10 @@ class GatewayConfig:
             raise ValueError(
                 f"gateway.leak_gate must be 'block' or 'warn', got {self.leak_gate!r}"
             )
+        if not isinstance(self.handoff_ttl_seconds, int) or self.handoff_ttl_seconds <= 0:
+            raise ValueError("gateway.handoff_ttl_seconds must be a positive integer")
+        if not isinstance(self.handoff_max_attempts, int) or self.handoff_max_attempts < 1:
+            raise ValueError("gateway.handoff_max_attempts must be >= 1")
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "GatewayConfig":
@@ -79,6 +87,10 @@ class GatewayConfig:
                 gateway.get("passthrough_allowlist", DEFAULT_PASSTHROUGH_ALLOWLIST)
             ),
             leak_gate=gateway.get("leak_gate", "block"),
+            handoff_ttl_seconds=int(
+                gateway.get("handoff_ttl_seconds", 24 * 3600)
+            ),
+            handoff_max_attempts=int(gateway.get("handoff_max_attempts", 3)),
         )
 
         if os.environ.get("MASK_SERVER_HOST"):
@@ -93,6 +105,10 @@ class GatewayConfig:
             cfg.gateway_token = os.environ["MASK_GATEWAY_TOKEN"]
         if os.environ.get("MASK_LEAK_GATE"):
             cfg.leak_gate = os.environ["MASK_LEAK_GATE"]
+        if os.environ.get("MASK_HANDOFF_TTL_SECONDS"):
+            cfg.handoff_ttl_seconds = int(os.environ["MASK_HANDOFF_TTL_SECONDS"])
+        if os.environ.get("MASK_HANDOFF_MAX_ATTEMPTS"):
+            cfg.handoff_max_attempts = int(os.environ["MASK_HANDOFF_MAX_ATTEMPTS"])
         return cfg
 
     @staticmethod

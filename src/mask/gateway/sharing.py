@@ -6,6 +6,7 @@ unseal with the shared passphrase, merge into its session, done.
 
 Envelope format (v1):
     {"v": 1,
+     "exp": <unix ts>,          # informational clear copy of the expiry
      "kdf": {"name": "argon2id", "salt": <b64>, "opslimit": n, "memlimit": n},
      "boxed": <b64 of nonce || XSalsa20-Poly1305 ciphertext>}
 
@@ -14,12 +15,25 @@ Envelope format (v1):
   passphrase or a tampered envelope raises nacl.exceptions.CryptoError
 - the envelope carries its own KDF parameters, so future releases can
   raise the cost without invalidating old files
+
+Two ways an envelope becomes permanently undecryptable:
+- 時間切れ: the authoritative expiry is sealed inside the authenticated
+  payload (the clear copy is only a fast-fail convenience). After it
+  passes, unseal raises EnvelopeExpired — fail-closed, so envelopes
+  without an expiry are refused too.
+- 認証失敗: the gateway counts failed passphrase attempts per envelope
+  (keyed by envelope_fingerprint) and locks an envelope for good after
+  the configured limit. This bounds online guessing through the gateway;
+  offline guessing against a copied envelope is mitigated by the argon2id
+  cost, the passphrase strength, and the expiry window.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import time
 
 from nacl import pwhash, secret, utils as nacl_utils
 
@@ -28,11 +42,25 @@ ENVELOPE_VERSION = 1
 KDF_OPSLIMIT = pwhash.argon2id.OPSLIMIT_INTERACTIVE
 KDF_MEMLIMIT = pwhash.argon2id.MEMLIMIT_INTERACTIVE
 
+# Default envelope lifetime: 24 h.
+DEFAULT_TTL_SECONDS = 24 * 3600
 
-def seal(payload: dict, passphrase: str) -> dict:
-    """Encrypt a JSON-serializable payload under a passphrase."""
+
+class EnvelopeExpired(ValueError):
+    """The envelope's sealed expiry has passed; decryption is refused."""
+
+
+def seal(payload: dict, passphrase: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict:
+    """Encrypt a JSON-serializable payload under a passphrase.
+
+    The expiry (`exp`, unix time) is sealed into the authenticated payload;
+    a clear copy on the envelope lets recipients see when it dies.
+    """
     if not passphrase:
         raise ValueError("passphrase must not be empty")
+    if not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be a positive integer")
+    exp = int(time.time()) + ttl_seconds
     salt = nacl_utils.random(pwhash.argon2id.SALTBYTES)
     key = pwhash.argon2id.kdf(
         secret.SecretBox.KEY_SIZE,
@@ -42,10 +70,11 @@ def seal(payload: dict, passphrase: str) -> dict:
         memlimit=KDF_MEMLIMIT,
     )
     box = secret.SecretBox(key)
-    plaintext = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    plaintext = json.dumps({**payload, "exp": exp}, ensure_ascii=False).encode("utf-8")
     boxed = box.encrypt(plaintext)
     return {
         "v": ENVELOPE_VERSION,
+        "exp": exp,
         "kdf": {
             "name": "argon2id",
             "salt": base64.b64encode(salt).decode("ascii"),
@@ -59,11 +88,17 @@ def seal(payload: dict, passphrase: str) -> dict:
 def unseal(envelope: dict, passphrase: str) -> dict:
     """Decrypt an envelope back to its payload.
 
-    Raises nacl.exceptions.CryptoError on a wrong passphrase or tampered
+    Raises EnvelopeExpired once the sealed expiry has passed (checked
+    against the clear copy first for a fast fail, then against the
+    authoritative copy inside the ciphertext). Raises
+    nacl.exceptions.CryptoError on a wrong passphrase or tampered
     ciphertext, ValueError/KeyError/TypeError on a malformed envelope.
     """
     if not isinstance(envelope, dict) or envelope.get("v") != ENVELOPE_VERSION:
         raise ValueError("unsupported envelope version")
+    clear_exp = envelope.get("exp")
+    if isinstance(clear_exp, (int, float)) and time.time() > clear_exp:
+        raise EnvelopeExpired("envelope expired")
     kdf = envelope["kdf"]
     if not isinstance(kdf, dict) or kdf.get("name") != "argon2id":
         raise ValueError("unsupported kdf")
@@ -77,4 +112,23 @@ def unseal(envelope: dict, passphrase: str) -> dict:
     )
     box = secret.SecretBox(key)
     plaintext = box.decrypt(base64.b64decode(envelope["boxed"]))
-    return json.loads(plaintext.decode("utf-8"))
+    payload = json.loads(plaintext.decode("utf-8"))
+    exp = payload.get("exp") if isinstance(payload, dict) else None
+    if not isinstance(exp, (int, float)) or time.time() > exp:
+        # authoritative, tamper-evident check; missing exp fails closed
+        raise EnvelopeExpired("envelope expired")
+    return payload
+
+
+def envelope_fingerprint(envelope: dict) -> str:
+    """Stable identity of a decryptable envelope (salt + ciphertext).
+
+    Used to key the failed-attempt lockout: a copied envelope has the same
+    fingerprint, and a mutated one can never decrypt, so guessing through
+    the gateway cannot be reset by re-copying or tweaking bytes.
+    """
+    kdf = envelope.get("kdf") if isinstance(envelope, dict) else None
+    salt = kdf.get("salt", "") if isinstance(kdf, dict) else ""
+    boxed = envelope.get("boxed", "") if isinstance(envelope, dict) else ""
+    material = f"{salt}|{boxed}".encode("utf-8")
+    return hashlib.sha256(material).hexdigest()

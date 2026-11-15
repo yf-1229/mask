@@ -35,7 +35,12 @@ from nacl.exceptions import CryptoError
 from mask.detect.dictionary import UserDictionary
 from mask.gateway.config import GatewayConfig
 from mask.gateway.leakguard import find_header_leaks, find_leaks
-from mask.gateway.sharing import seal, unseal
+from mask.gateway.sharing import (
+    EnvelopeExpired,
+    envelope_fingerprint,
+    seal,
+    unseal,
+)
 from mask.pipeline import Session
 
 logger = logging.getLogger("mask.gateway")
@@ -194,6 +199,10 @@ def create_app(
         else UserDictionary()
     )
     app.state.dictionary = dictionary
+    # Failed-passphrase attempts per envelope fingerprint (lockout state).
+    # Process-local by design: restarting the gateway resets counters, but
+    # the sealed expiry still bounds the envelope's life.
+    app.state.handoff_failures: dict[str, int] = {}
     if config.session_scope == "global":
         # NER model loads once here, not per request.
         app.state.session = Session(dictionary=dictionary, use_ner=config.use_ner)
@@ -329,9 +338,10 @@ def create_app(
     async def admin_export(request: Request) -> Response:
         """Seal the session mapping table under a passphrase (team handoff).
 
-        The response envelope is ciphertext: it can travel over any
-        channel. The passphrase travels separately (password manager,
-        in person). Raw values never appear in logs.
+        The response envelope is ciphertext with a sealed expiry: it can
+        travel over any channel, dies at the expiry, and the passphrase
+        travels separately (password manager, in person). Raw values never
+        appear in logs.
         """
         denied = _admin_authorized(request)
         if denied is not None:
@@ -342,10 +352,21 @@ def create_app(
         passphrase = body.get("passphrase") if isinstance(body, dict) else None
         if not isinstance(passphrase, str) or not passphrase:
             return _bad_request("passphrase required")
+        ttl = config.handoff_ttl_seconds
+        if isinstance(body, dict) and body.get("ttl_seconds") is not None:
+            ttl = body["ttl_seconds"]
+        if not isinstance(ttl, int) or ttl <= 0:
+            return _bad_request("ttl_seconds must be a positive integer")
         records = app.state.session.pseudonyms.export_records()
-        envelope = seal({"v": 1, "records": records}, passphrase)
+        envelope = seal({"v": 1, "records": records}, passphrase, ttl_seconds=ttl)
         logger.info("admin export: %d records sealed", len(records))
-        return JSONResponse({"count": len(records), "envelope": envelope})
+        return JSONResponse(
+            {
+                "count": len(records),
+                "expires_at": envelope["exp"],
+                "envelope": envelope,
+            }
+        )
 
     @app.post("/admin/import")
     async def admin_import(request: Request) -> Response:
@@ -353,8 +374,12 @@ def create_app(
 
         This completes the handoff in the receiving process: after import,
         the same values mask to the same tokens and imported artifacts
-        restore. Token clashes with different values are never rebound;
-        they are reported as conflicts.
+        restore. Security posture: a sealed expiry (時間切れ) refuses
+        decryption outright, and failed passphrase attempts (認証失敗) are
+        counted per envelope — at the configured limit the envelope is
+        locked for good, even for the correct passphrase. Token clashes
+        with different values are never rebound; they are reported as
+        conflicts.
         """
         denied = _admin_authorized(request)
         if denied is not None:
@@ -366,18 +391,77 @@ def create_app(
         passphrase = body.get("passphrase") if isinstance(body, dict) else None
         if not isinstance(envelope, dict) or not isinstance(passphrase, str):
             return _bad_request("passphrase and envelope required")
+        kdf = envelope.get("kdf")
+        if (
+            not isinstance(kdf, dict)
+            or not isinstance(kdf.get("salt"), str)
+            or not isinstance(envelope.get("boxed"), str)
+        ):
+            return _bad_request("malformed envelope")
+
+        fingerprint = envelope_fingerprint(envelope)
+        failures = app.state.handoff_failures
+        if failures.get(fingerprint, 0) >= config.handoff_max_attempts:
+            logger.warning("admin import: envelope locked (fp %s)", fingerprint[:12])
+            return JSONResponse(
+                status_code=423,
+                content={
+                    "error": {
+                        "message": (
+                            "envelope locked after too many failed attempts; "
+                            "request a fresh export"
+                        ),
+                        "code": "mask_envelope_locked",
+                    }
+                },
+            )
         try:
             payload = unseal(envelope, passphrase)
+        except EnvelopeExpired:
+            logger.warning("admin import: envelope expired (fp %s)", fingerprint[:12])
+            return JSONResponse(
+                status_code=410,
+                content={
+                    "error": {
+                        "message": "envelope expired; request a fresh export",
+                        "code": "mask_envelope_expired",
+                    }
+                },
+            )
         except (CryptoError, ValueError, KeyError, TypeError):
+            attempts = failures.get(fingerprint, 0) + 1
+            failures[fingerprint] = attempts
+            remaining = config.handoff_max_attempts - attempts
+            logger.warning(
+                "admin import: unseal failed (fp %s, attempt %d, %d remaining)",
+                fingerprint[:12],
+                attempts,
+                max(remaining, 0),
+            )
+            if remaining <= 0:
+                return JSONResponse(
+                    status_code=423,
+                    content={
+                        "error": {
+                            "message": (
+                                "envelope locked after too many failed attempts; "
+                                "request a fresh export"
+                            ),
+                            "code": "mask_envelope_locked",
+                        }
+                    },
+                )
             return JSONResponse(
                 status_code=400,
                 content={
                     "error": {
                         "message": "wrong passphrase or corrupted envelope",
                         "code": "mask_unseal_failed",
+                        "attempts_remaining": remaining,
                     }
                 },
             )
+        failures.pop(fingerprint, None)
         records = payload.get("records") if isinstance(payload, dict) else None
         if not isinstance(records, list):
             return _bad_request("envelope payload has no records")
