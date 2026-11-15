@@ -20,5 +20,6 @@ scope = "global"   # "global" | "request"
 
 [gateway]
 # token = "team-secret"           # クライアントに API キーとして配る(空なら認証なし)
+                                  # /admin/export・/admin/import の認証にも使う
 passthrough_allowlist = ["/v1/models"]   # 他のパスはすべて 403 で拒否
 leak_gate = "block"              # "block": 実値の残存を検出したら送信拒否 / "warn": ログのみ

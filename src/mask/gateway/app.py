@@ -30,10 +30,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from nacl.exceptions import CryptoError
 
 from mask.detect.dictionary import UserDictionary
 from mask.gateway.config import GatewayConfig
 from mask.gateway.leakguard import find_header_leaks, find_leaks
+from mask.gateway.sharing import seal, unseal
 from mask.pipeline import Session
 
 logger = logging.getLogger("mask.gateway")
@@ -256,6 +258,37 @@ def create_app(
             },
         )
 
+    def _scope_unsupported() -> Response:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "message": "admin endpoints require session.scope = 'global'",
+                    "code": "mask_scope_unsupported",
+                }
+            },
+        )
+
+    def _bad_request(message: str) -> Response:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"message": message, "code": "mask_bad_request"}},
+        )
+
+    def _admin_authorized(request: Request) -> Response | None:
+        """Admin endpoints stay disabled until gateway.token is set."""
+        if not config.gateway_token:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "message": "admin endpoints require gateway.token to be set",
+                        "code": "mask_admin_disabled",
+                    }
+                },
+            )
+        return _authorized(request)
+
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
         return {
@@ -291,6 +324,78 @@ def create_app(
         data = upstream.json()
         restore_chat_response(data, session)
         return JSONResponse(data)
+
+    @app.post("/admin/export")
+    async def admin_export(request: Request) -> Response:
+        """Seal the session mapping table under a passphrase (team handoff).
+
+        The response envelope is ciphertext: it can travel over any
+        channel. The passphrase travels separately (password manager,
+        in person). Raw values never appear in logs.
+        """
+        denied = _admin_authorized(request)
+        if denied is not None:
+            return denied
+        if config.session_scope != "global":
+            return _scope_unsupported()
+        body = await request.json()
+        passphrase = body.get("passphrase") if isinstance(body, dict) else None
+        if not isinstance(passphrase, str) or not passphrase:
+            return _bad_request("passphrase required")
+        records = app.state.session.pseudonyms.export_records()
+        envelope = seal({"v": 1, "records": records}, passphrase)
+        logger.info("admin export: %d records sealed", len(records))
+        return JSONResponse({"count": len(records), "envelope": envelope})
+
+    @app.post("/admin/import")
+    async def admin_import(request: Request) -> Response:
+        """Unseal an exported envelope and merge it into the session table.
+
+        This completes the handoff in the receiving process: after import,
+        the same values mask to the same tokens and imported artifacts
+        restore. Token clashes with different values are never rebound;
+        they are reported as conflicts.
+        """
+        denied = _admin_authorized(request)
+        if denied is not None:
+            return denied
+        if config.session_scope != "global":
+            return _scope_unsupported()
+        body = await request.json()
+        envelope = body.get("envelope") if isinstance(body, dict) else None
+        passphrase = body.get("passphrase") if isinstance(body, dict) else None
+        if not isinstance(envelope, dict) or not isinstance(passphrase, str):
+            return _bad_request("passphrase and envelope required")
+        try:
+            payload = unseal(envelope, passphrase)
+        except (CryptoError, ValueError, KeyError, TypeError):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "wrong passphrase or corrupted envelope",
+                        "code": "mask_unseal_failed",
+                    }
+                },
+            )
+        records = payload.get("records") if isinstance(payload, dict) else None
+        if not isinstance(records, list):
+            return _bad_request("envelope payload has no records")
+        counts = {"imported": 0, "already": 0, "conflict": 0, "invalid": 0}
+        conflicts: list[str] = []
+        for rec in records:
+            if not isinstance(rec, dict):
+                counts["invalid"] += 1
+                continue
+            status = app.state.session.pseudonyms.import_record(
+                rec.get("token", ""), rec.get("value", ""),
+                int(rec.get("occurrences", 0)),
+            )
+            counts[status] += 1
+            if status == "conflict":
+                conflicts.append(rec.get("token", ""))
+        logger.info("admin import: %s", counts)  # counts only, never values
+        return JSONResponse({"result": counts, "conflicts": conflicts})
 
     @app.api_route(
         "/{path:path}",

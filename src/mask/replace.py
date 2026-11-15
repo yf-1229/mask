@@ -8,8 +8,12 @@ Invariants enforced here:
   contains the other, preventing entity fragmentation.
 - The id pool is shuffled per session so token ids carry no positional
   meaning ("人名1" is not "the first person that appeared").
-- The table lives only in process memory. There is deliberately no
-  serialization/export API for the table itself.
+- The table lives only in process memory. The only way it leaves is the
+  encrypted handoff envelope (gateway /admin/export -> seal ->
+  /admin/import); there is no plaintext serialization.
+- import_record never rebinds an existing token to a different value: on a
+  token clash the local binding wins and the clash is reported, so an
+  imported artifact can never silently restore to the wrong person.
 """
 
 from __future__ import annotations
@@ -62,7 +66,10 @@ class Replacement:
 
 
 class PseudonymMap:
-    """In-memory, session-scoped mapping table. Not serializable by design."""
+    """In-memory, session-scoped mapping table.
+
+    Leaves the process only as a sealed envelope (mask.gateway.sharing).
+    """
 
     def __init__(self) -> None:
         self._pool: list[int] = list(range(1, _POOL_SIZE + 1))
@@ -115,6 +122,68 @@ class PseudonymMap:
     def raw_values(self) -> set[str]:
         """NFKC-normalized raw values seen this session, variants included."""
         return set(self._seen)
+
+    def export_records(self) -> list[dict[str, object]]:
+        """Snapshot of the table for the encrypted handoff.
+
+        Contains raw values by definition; only ever leaves the process
+        inside a sealed envelope (gateway /admin/export).
+        """
+        return [
+            {
+                "token": rec.token,
+                "value": rec.value,
+                "occurrences": rec.occurrences,
+            }
+            for rec in self._records.values()
+        ]
+
+    def import_record(
+        self, token: str, value: str, occurrences: int = 0
+    ) -> str:
+        """Merge one exported binding into this table.
+
+        Returns "imported" | "already" | "conflict" | "invalid".
+        On a token clash with a different value the local binding wins
+        ("conflict"): the token is never rebound, so restoring an imported
+        artifact can never substitute the wrong person silently.
+        """
+        inner = (
+            token[len(TOKEN_OPEN) : -len(TOKEN_CLOSE)]
+            if token.startswith(TOKEN_OPEN) and token.endswith(TOKEN_CLOSE)
+            else ""
+        )
+        label = next(
+            (
+                l
+                for l in LABEL_TO_TYPE
+                if inner.startswith(l) and inner[len(l) :].isdigit()
+            ),
+            None,
+        )
+        if label is None or not value:
+            return "invalid"
+        for rec in self._records.values():
+            if rec.token == token:
+                if normalize_key(rec.value) == normalize_key(value):
+                    return "already"
+                return "conflict"
+        etype = LABEL_TO_TYPE[label]
+        key_value = normalize_key(value)
+        self._seen.add(key_value)
+        token_id = int(inner[len(label) :])
+        if token_id in self._pool:
+            self._pool.remove(token_id)
+        key = (etype, key_value)
+        if key in self._records:
+            # value already known under another token: keep both bindings
+            # so imported artifacts restore; the local token keeps winning
+            # in assign() (records scan in insertion order)
+            key = (etype, key_value + token)
+        self._records[key] = TokenRecord(
+            token=token, label=label, value=value, occurrences=occurrences
+        )
+        return "imported"
 
     def records(self) -> list[TokenRecord]:
         return list(self._records.values())

@@ -21,14 +21,15 @@ def _make_client(tmp_path, dictionary_terms=None, **overrides):
     dictionary_path = (
         _dictionary_file(tmp_path, dictionary_terms) if dictionary_terms else None
     )
-    config = GatewayConfig(
+    kwargs = dict(
         upstream_base_url="https://upstream.test/v1",
         upstream_api_key="sk-real",
         use_ner=False,
         dictionary_path=dictionary_path,
         session_scope="global",
-        **overrides,
     )
+    kwargs.update(overrides)
+    config = GatewayConfig(**kwargs)
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:

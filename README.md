@@ -35,6 +35,33 @@ LLMクライアント <──(実名に復元)── mask gateway <──(疑似
 これは検出層の担当で、カナリアコーパスが回帰ゲートになる。
 ログには実値を書かない(フィールドパスと sha256 のみ)。
 
+## 対応表の共有 (暗号化ハンドオフ)
+
+マッピングテーブルは再識別の鍵。共有は**暗号文(封筒)**でのみ行い、
+受け手のゲートウェイで復号まで完了する。
+
+```sh
+# 送り手: 対応表をパスフレーズで封緘 (gateway.token 必須)
+curl -s -X POST http://127.0.0.1:8080/admin/export \
+  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -d '{"passphrase": "<チームのパスフレーズ>"}' > handoff.maskbox
+
+# 受け手: 復号して自セッションに取り込み — これで完了
+curl -s -X POST http://127.0.0.1:8080/admin/import \
+  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -d "$(jq '. + {passphrase: "<パスフレーズ>"}' handoff.maskbox)"
+```
+
+- 暗号: argon2id(パスフレーズ→鍵) + XSalsa20-Poly1305(認証付き)。
+  封筒は暗号文なのでどんな経路で渡しても安全。パスフレーズは別経路
+  (パスワードマネージャ等)で共有する
+- 取り込み後、同じ値は同じトークンにマスクされ、送り手の成果物が
+  受け手のゲートウェイでそのまま復元される
+- トークンIDの衝突(別の値が同じID)は上書きしない: `conflict` として
+  報告されローカルの束縛が優先(誤った人物への復元を構造的に防止)
+- 取り込んだ値はリークゲートの対象にもなる(実値の送出は引き続き拒否)
+- 管理エンドポイントは `gateway.token` 未設定なら 403(fail-closed)
+
 ## セットアップ
 
 ```sh
