@@ -1,7 +1,7 @@
 # mask gateway configuration
 # copy to mask.toml and edit. environment variables override this file:
 #   MASK_SERVER_HOST / MASK_SERVER_PORT / MASK_UPSTREAM_BASE_URL / MASK_UPSTREAM_API_KEY
-#   MASK_GATEWAY_TOKEN / MASK_LEAK_GATE
+#   MASK_GATEWAY_TOKEN / MASK_LEAK_GATE / MASK_STATUS_PUBLIC
 
 [server]
 host = "127.0.0.1"
@@ -26,3 +26,5 @@ leak_gate = "block"              # "block": 実値の残存を検出したら送
 handoff_ttl_seconds = 3600       # 封筒の有効期限(秒)。期限後は復号不可能
 handoff_max_attempts = 3        # パスフレーズ誤り回数。超えたらその封筒は恒久ロック
 admin_allow_remote = false       # export/import は localhost からのみ(true で解除)
+status_public = false            # /status インジケータの公開(ウェブサイトのウィジェット用)。
+                                 # false なら /status は他の入口と同じく gateway.token 必須

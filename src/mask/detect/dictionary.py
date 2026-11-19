@@ -49,6 +49,10 @@ class UserDictionary:
             terms[term] = labels[parts[1]]
         return cls(terms)
 
+    def size(self) -> int:
+        """Number of registered terms (indicator surface; contents stay put)."""
+        return len(self._terms)
+
     def scan(self, text: str) -> list[Entity]:
         found: list[Entity] = []
         taken: list[tuple[int, int]] = []

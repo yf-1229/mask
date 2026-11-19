@@ -8,9 +8,92 @@ LLMクライアント ──(実名入り)──> mask gateway ──(疑似名�
 LLMクライアント <──(実名に復元)── mask gateway <──(疑似名)── LLM API
 ```
 
-- OpenAI 互換 (`/v1/chat/completions`)。base URL を変えるだけで大半のハーネスから利用可能
+- OpenAI 互換 (`/v1/chat/completions`) と **Anthropic 互換 (`/v1/messages`)** の
+  両プロトコルでエージェントを受け付けます(Claude Code は base URL を変えるだけ)
 - 本物の API キーはゲートウェイだけが持つ(クライアントにはダミーキーを配る)
 - マッピングテーブルはプロセス内メモリのみ。LLM には疑似名しか渡らない
+- シェルからは `mask` CLI、人間向けにも同じ保証の入口を提供
+- **信頼性インジケータ**: リクエスト毎の `X-Mask-*` ヘッダ、`/status` スナップショット、
+  `mask status` パネル — 「守れている」ことを見える化(数値のみ、実値なし)
+
+## 三つの入口
+
+どの入口から入っても、マスク層・リークゲート・インジケータは同じ経路で効きます。
+弱い経路は存在しません。
+
+| 入口 | 対象 | 使い方 |
+|---|---|---|
+| プロキシ (OpenAI互換) | OpenAI 系ハーネス/エージェント | `base URL = http://127.0.0.1:8080/v1` |
+| プロキシ (Anthropic互換) | Claude Code など | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=<gateway.token>` |
+| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask status` / `mask serve` |
+
+### Anthropic 互換入口 (`/v1/messages`)
+
+エージェントハーネスの Anthropic Messages プロトコルを
+モデルに依存しない形で受け付けます:
+
+- リクエストは OpenAI chat 形式に翻訳してからマスク・リークゲートを通ります
+  (低い経路を作らない)。未対応ブロック(画像等)は破棄 — デフォルト拒否
+- `tools` / `tool_use` / `tool_result` を含むエージェントループを翻訳。
+  ツール引数はローカル実行のため**復元して**返します。ツール結果は
+  次のターンで他の入力と同様にマスクされます
+- `stream: true` は上流をバッファして復元し、正しい Anthropic SSE
+  イベント列として返します(Phase A と同じ: 正確だが逐次ではない)
+- 認証は `Authorization: Bearer` と `x-api-key` の両スロットで受け付けます。
+
+### シェル入口 (`mask` コマンド)
+
+```sh
+uv run mask chat "山田太郎さんに連絡して"     # 1往復。応答は復元済み
+uv run mask check "090-1234-5678 です"       # 事前確認: 何がマスクされるか(ネット不要)
+uv run mask status                           # 信頼性インジケータパネル
+uv run mask status --json                    # /status の生スナップショット
+uv run mask serve                            # ゲートウェイ起動 (mask-server と同じ)
+```
+
+- `check` は検出のドライラン。stdout にマスク済みテキスト、stderr に
+  インジケータ(検出数・タイプ)。パイプで繋げます
+- `chat` は稼働中のゲートウェイに繋ぎ、応答本文を stdout へ。
+  `X-Mask-*` ヘッダから信頼性フッタも表示
+- API キー Spoofing の心配なし: CLI は `gateway.token` を Bearer に使うだけ
+
+## 信頼性インジケータ
+
+「絶対に外に出さない」は、見えなければ検証できません。三つの面で常時表示します。
+いずれも**数値のみ** — 実値・トークン・エンティティパスは決して含みません。
+
+1. **レスポンスヘッダ (1リクエスト毎)** — すべての応答に付加:
+
+   ```
+   X-Mask: on
+   X-Mask-In: v1/messages          # どの入口を通ったか
+   X-Mask-Leak-Gate: block
+   X-Mask-Masked: 3                # 置換した実値の数
+   X-Mask-Restored: 2              # 復元したトークン数
+   X-Mask-Fuzzy-Repaired: 0        # 破損トークンの修復数
+   X-Mask-Unresolved: 0           # 復元できなかったトークン(要注目)
+   X-Mask-Nonce: 734dc18c9d7a      # この応答用に鋳造(キャッシュ検出用)
+   ```
+
+   リークゲート遮断時は `X-Mask-Leak-Blocked: true` も付きます。
+
+2. **`GET /status`** — 姿勢 (leak gate モード、session scope、NER、辞書語数、
+   マッピングテーブル件数、トークン設定、upstream) とプロセス累積カウンタ
+   (リクエスト数、マスク/復元数、リーク遮断数、パス拒否数、認証拒否数、
+   封筒統計、uptime)。`gateway.token` 設定時は他の入口と同じくトークンが必要。
+   `gateway.status_public = true` を明示すると公開スナップショットになります
+   (ウェブサイトのウィジェットが読み取るのはこれ)。fail-closed 既定: false。
+
+3. **CLI パネル (`mask status`)** — `/status` を引いてランプ付きで表示:
+
+   ```
+   ● leak gate        block  (fail-closed)
+   ● session          global  (mapping table: 2 records)
+   ● ner              ja_ginza detection on
+   ● dictionary       0 terms
+   ● gateway token    required (both entrances)
+     requests         2 / entities masked 2 / tokens restored 2 / unresolved 0
+   ```
 
 ## リーク防止の多層防御
 
@@ -18,7 +101,8 @@ LLMクライアント <──(実名に復元)── mask gateway <──(疑似
 
 1. **マスク層** — `messages[].content`(文字列/パーツ)と `tool_calls[].function.arguments`
    (JSON 文字列を再帰的にマスク)を置換。
-2. **デフォルト拒否のルーティング** — 上流に転送するのは `/v1/chat/completions` と
+2. **デフォルト拒否のルーティング** — 上流に転送するのは `/v1/chat/completions`
+   (OpenAI互換入口からの内部変換後のリクエストを含む)と
    `gateway.passthrough_allowlist` に列挙したパスのみ。他は 403 で拒否
    (embeddings 等の未対応スキーマに PII が流れることを構造的に防ぐ)。
 3. **送信前リークゲート** — 送信直前にペイロード全体(キー含む)と転送ヘッダを
@@ -90,16 +174,29 @@ curl -s -X POST http://127.0.0.1:8080/admin/import \
 uv sync
 cp mask.toml.example mask.toml
 # mask.toml を編集: upstream.base_url / upstream.api_key
-uv run mask-server
+uv run mask serve                 # (mask-server でも同じ)
+```
+
+## 公式ウェブサイト
+
+`site/index.html` — 静的・単一ファイル・外部 CDN リクエストなし
+(このツールの思想の実践)。アーキテクチャ図、三つの入口の設定表、
+多層防御、封筒ハンドオフ、そして**ライブ・インジケータ**:
+`http://127.0.0.1:8080/status` を直接読みに行き、ゲートウェイの姿勢と
+カウンタをランプ付きで表示します。読み取りには
+`gateway.status_public = true` の明示が必要(fail-closed)。
+
+```sh
+python3 -m http.server 8877 -d site    # 例: http://127.0.0.1:8877
 ```
 
 ## ユーザー側の設定(一度だけ)
 
-| 設定 | 値 |
+| クライアント | 設定 |
 |---|---|
-| API base URL | `http://127.0.0.1:8080/v1` |
-| API key | 任意のダミー (`sk-mask` など) |
-| model | 今まで通り |
+| OpenAI 互換ハーネス | base URL `http://127.0.0.1:8080/v1`、API key = `gateway.token` (未設定なら任意のダミー) |
+| Claude Code (Anthropic互換) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=gateway.token` |
+| シェル | `mask chat` / `mask check` / `mask status` |
 
 ## 設定 (mask.toml)
 
@@ -122,8 +219,11 @@ scope = "global"            # "global": 会話を通じて疑似名を安定さ�
 
 [gateway]
 token = ""                   # クライアントに配るトークン(空なら認証なし=localhost限定)
+                            # Bearer (OpenAI式) と x-api-key (Anthropic式) の両方で受付
 passthrough_allowlist = ["/v1/models"]  # この他に通すパス。他はすべて 403
 leak_gate = "block"          # "block": 実値残存で送信拒否 / "warn": ログのみ
+status_public = false        # /status スナップショットの公開(ウェブサイトの
+                            # ウィジェット用)。false なら /status はトークン必須
 ```
 
 辞書タイプ: `person` / `org` / `location` / `address` / `phone` / `email` / `account`
@@ -131,7 +231,10 @@ leak_gate = "block"          # "block": 実値残存で送信拒否 / "warn": �
 ## 現在の制限 (Phase A)
 
 - `stream: true` は動作するが、upstream のストリームを全件バッファしてから
-  復元済みの 1 チャンクとして返す(正確だが逐次ではない)。逐次復元は Phase B。
+  復元済みで返す(OpenAI互換は 1 チャンク、Anthropic互換は正しいイベント列)。
+  正確だが逐次ではない。逐次復元は Phase B。
+- Anthropic互換入口はテキスト・ツール系ブロックを翻訳。画像・thinking 等の
+  未対応ブロックは破棄します(デフォルト拒否)。
 - allowlist に追加したパスはマスクされずそのまま通る(リークゲートは効く)。
   PII を含みうるスキーマ(embeddings 等)を足す場合は注意。
 - base URL を変更できないクラウドサービス (ChatGPT web 等) は対象外。

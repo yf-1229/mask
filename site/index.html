@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="mask — LLM API の前に置く PII 匿名化ゲートウェイ。実名は機械の外に出ない。">
+<title>mask — LLM API の前に置く PII 匿名化ゲートウェイ</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #111823;
+    --panel2: #0e141d;
+    --line: #1f2a37;
+    --text: #e6edf3;
+    --muted: #93a4b5;
+    --accent: #35d0ba;      /* 封蝋の緑 */
+    --accent-dim: #1e8f80;
+    --warn: #e5b567;
+    --danger: #e06c75;
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.8;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* header */
+  header {
+    border-bottom: 1px solid var(--line);
+    background: rgba(11, 15, 20, 0.92);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 10;
+  }
+  .bar { display: flex; align-items: center; gap: 24px; padding: 14px 0; }
+  .logo {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--text);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo .seal {
+    display: inline-block; width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+    position: relative;
+  }
+  .logo .seal::after {
+    content: "封";
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    color: #06231f; font-size: 11px; font-weight: 700;
+  }
+  nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
+  nav a { color: var(--muted); }
+  nav a:hover { color: var(--text); text-decoration: none; }
+
+  /* hero */
+  .hero { padding: 88px 0 72px; border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(1200px 400px at 70% -10%, rgba(53, 208, 186, 0.10), transparent),
+      var(--bg);
+  }
+  .hero h1 { font-size: 44px; line-height: 1.3; margin: 0 0 18px; font-weight: 800; letter-spacing: -0.01em; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p { color: var(--muted); max-width: 42em; margin: 0 0 32px; font-size: 17px; }
+  .cta { display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--mono); font-size: 14px;
+    padding: 12px 20px; border-radius: 10px;
+    border: 1px solid var(--line);
+    color: var(--text); background: var(--panel);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #06231f; font-weight: 700; }
+  .btn:hover { text-decoration: none; filter: brightness(1.08); }
+
+  code, pre { font-family: var(--mono); }
+  :not(pre) > code {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 1px 6px; font-size: 0.9em;
+  }
+  pre {
+    background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 18px; overflow-x: auto;
+    font-size: 13.5px; line-height: 1.7;
+  }
+  .diagram {
+    margin: 36px 0 0; padding: 22px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
+    font-size: 13.5px; color: var(--muted);
+    white-space: pre; overflow-x: auto;
+  }
+  .diagram b { color: var(--text); font-weight: 600; }
+  .diagram .ok { color: var(--accent); }
+  .diagram .ng { color: var(--danger); }
+
+  /* sections */
+  section { padding: 72px 0; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 30px; margin: 0 0 8px; font-weight: 800; }
+  .sub { color: var(--muted); margin: 0 0 40px; max-width: 46em; }
+  h3 { font-size: 18px; margin: 40px 0 12px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 24px;
+  }
+  .card h4 { margin: 0 0 6px; font-size: 16px; display: flex; gap: 10px; align-items: center; }
+  .card p { color: var(--muted); font-size: 14px; margin: 6px 0 14px; }
+  .badge {
+    font-family: var(--mono); font-size: 11px; padding: 2px 8px;
+    border-radius: 999px; border: 1px solid var(--accent-dim);
+    color: var(--accent); background: rgba(53, 208, 186, 0.08);
+    flex-shrink: 0;
+  }
+  .card pre { margin: 0; font-size: 12.5px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+
+  ol.layers { list-style: none; counter-reset: l; padding: 0; margin: 0; }
+  ol.layers li {
+    counter-increment: l; position: relative;
+    padding: 14px 0 14px 54px; border-bottom: 1px solid var(--line);
+  }
+  ol.layers li:last-child { border-bottom: 0; }
+  ol.layers li::before {
+    content: counter(l);
+    position: absolute; left: 0; top: 14px;
+    width: 32px; height: 32px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    color: var(--accent); font-family: var(--mono); font-weight: 700;
+  }
+  ol.layers b { display: block; margin-bottom: 2px; }
+  ol.layers span { color: var(--muted); font-size: 14px; }
+
+  /* indicator widget */
+  .widget {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 24px; font-family: var(--mono); font-size: 13.5px;
+  }
+  .widget .row { display: flex; gap: 10px; align-items: baseline; }
+  .lamp { font-size: 15px; }
+  .lamp.on { color: var(--accent); }
+  .lamp.off { color: var(--muted); }
+  .widget .note { color: var(--muted); margin-top: 12px; font-size: 12.5px; }
+  .widget .sp { display: inline-block; width: 1px; }
+
+  footer { padding: 48px 0 72px; color: var(--muted); font-size: 13.5px; }
+  footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between; }
+
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 32px; }
+    nav { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <span class="logo"><span class="seal"></span>mask</span>
+    <nav>
+      <a href="#entrances">三つの入口</a>
+      <a href="#defense">多層防御</a>
+      <a href="#indicators">インジケータ</a>
+      <a href="#handoff">封筒</a>
+      <a href="#quickstart">導入</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <h1>実名は、LLMに渡らない。<br><em>mask</em> が帰り道も保証する。</h1>
+    <p>
+      mask は LLM API の前に置くローカルゲートウェイです。
+      ユーザーは普段どおり名前・電話番号・住所を入力し、外部に出るのは
+      <code>⟦人名7⟧</code> のような不透明な疑似名だけ。
+      応答は自動的に実名へ復元して戻ります。
+      エージェント (Claude Code など) はプロキシ経由で、人間はシェルから、
+      同じ保証の内側に入れます。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#quickstart">5分で試す</a>
+      <a class="btn" href="#indicators">信頼性インジケータを見る</a>
+    </div>
+    <div class="diagram"><b>LLMクライアント / エージェント / シェル</b>
+ ──(<span class="ng">実名入り</span>)──▶ ┌──────────────┐
+                                 │  <b>mask gateway</b>  │         上流の出力
+ ◀──(<b>実名に復元</b>)──         │ マスク・復元・  │ ◀─(疑似名)──┐
+                                 │ リークゲート・    │              │
+                                 │ インジケータ     │──(<span class="ok">疑似名のみ</span>)──▶ <b>LLM API</b>
+                                 └──────────────┘   実値は<span class="ng">絶対に通さない</span> (fail-closed)</div>
+  </div>
+</div>
+
+<section id="entrances">
+  <div class="wrap">
+    <h2>三つの入口、一つの保証</h2>
+    <p class="sub">
+      どの門から入っても、外に出る前に mask 層・リークゲート・インジケータを通ります。
+      弱い経路はありません。
+    </p>
+    <div class="cols">
+      <div class="card">
+        <h4>エージェント <span class="badge">プロキシ経由</span></h4>
+        <p>OpenAI 互換 (<code>/v1/chat/completions</code>) と Anthropic 互換
+        (<code>/v1/messages</code>) の両プロトコルで待ち受けます。
+        base URL を変えるだけで、エージェントハーネスがそのまま繋がります。</p>
+        <pre># Claude Code など (Anthropic プロトコル)
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_API_KEY=&lt;gateway.token&gt;
+
+# OpenAI 互換ハーネス
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1</pre>
+      </div>
+      <div class="card">
+        <h4>シェル <span class="badge">CLI</span></h4>
+        <p><code>mask</code> コマンドで、人間がターミナルから直接。
+        1プロンプトの往復 (<code>chat</code>)、送信前の確認 (<code>check</code>)、
+        信頼性の可視化 (<code>status</code>) ができます。</p>
+        <pre>$ mask chat "山田太郎さんに連絡して"
+山田太郎宛にご案内を送りました。
+[mask] masked 1 / restored 1 / unresolved 0 / leak gate block
+
+$ mask check "090-1234-5678 ..."
+⟦電話3⟧ ...      # 何がマスクされるか先に確認</pre>
+      </div>
+      <div class="card">
+        <h4>ウェブサイト <span class="badge">このページ</span></h4>
+        <p>公式ドキュメントと、稼働中ゲートウェイの
+        <a href="#indicators">ライブ・インジケータ</a>。
+        設定方法・保証の範囲・封筒による対応表の受け渡しまで、
+        ブラウザから確認できます。</p>
+        <pre>site/index.html   # 静的・単一ファイル・外部 CDN ゼロ
+                  # (このツールの思想どおり、
+                  #  このページ自体が外に要求を出しません)</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="defense">
+  <div class="wrap">
+    <h2>多層防御 — 「絶対に外に出さない」を構造で保証する</h2>
+    <p class="sub">
+      マスクの出来不出来に依存しません。検出し損ねた PII は、
+      最後の門で送信ごと棄却されます (fail-closed)。
+    </p>
+    <ol class="layers">
+      <li><b>マスク層</b><span>メッセージ本文・ツール引数 (JSON の中の文字列まで再帰的に) を疑似名に置換。NFKC 正規化で全角/半角の変種も同じ実体に束ねます。</span></li>
+      <li><b>デフォルト拒否のルーティング</b><span>上流へ転送するのは対応済みエンドポイントと allowlist に列挙したパスのみ。他はすべて 403。</span></li>
+      <li><b>送信前リークゲート</b><span>送信直前にペイロード全体 (キー・ヘッダ含む) を走査し、セッションが一度でも検出した実値が残っていればリクエストを破棄。マスク漏れ・未知のフィールド・再出現がすべて同じ失敗 (送信されない) に収束します。</span></li>
+      <li><b>ゲートウェイトークン</b><span>本物の API キーはゲートウェイだけが持ちます。クライアントにはダミートークンを配る。LAN 公開時も認証は定数時間比較。</span></li>
+      <li><b>カナリアテスト</b><span>結合テストがモック上流の受け取った全バイトに既知 PII が含まれないことを検証。回帰は CI で止まります。</span></li>
+    </ol>
+  </div>
+</section>
+
+<section id="indicators">
+  <div class="wrap">
+    <h2>信頼性インジケータ — 保証は、見えなければ信じられない</h2>
+    <p class="sub">
+      mask は「自分が何を守ったか」を静かに守りません。3つの面で常時表示します:
+      リクエスト単位のヘッダ、ゲートウェイ全体の <code>/status</code>、
+      そして CLI のインジケータパネル。数値のみ — 実値・トークン・経路は決して含みません。
+    </p>
+    <div class="cols">
+      <div class="card">
+        <h4>レスポンスヘッダ <span class="badge">1リクエスト毎</span></h4>
+        <p>すべての応答に <code>X-Mask-*</code> ヘッダが付きます。
+        エージェントハーネス・CLI・あなたのデバッグのどれからでも
+        「マスクされたか、復元しきれたか」が分かります。</p>
+        <pre>X-Mask: on
+X-Mask-In: v1/messages          # どの入口を通ったか
+X-Mask-Leak-Gate: block
+X-Mask-Masked: 3                # 置換した実値の数
+X-Mask-Restored: 2              # 元に戻したトークンの数
+X-Mask-Unresolved: 0            # 復元できなかったトークン(要注目)
+X-Mask-Nonce: 734dc18c9d7a      # この応答用に鋳造されたもの</pre>
+      </div>
+      <div class="card">
+        <h4>CLI パネル <span class="badge">mask status</span></h4>
+        <p>稼働中のゲートウェイから姿勢 (leak gate モード・NER・辞書・トークン) と
+        累積カウンタを引いて、ランプ付きで表示します。</p>
+        <pre>$ mask status
+mask gateway — reliability indicators
+● leak gate        block  (fail-closed)
+● session          global  (mapping table: 2 records)
+● ner              ja_ginza detection on
+● dictionary       0 terms
+● gateway token    required (both entrances)
+  requests         2
+  entities masked  2
+  tokens restored  2
+  unresolved       0</pre>
+      </div>
+    </div>
+    <h3>ライブ・ステータス (このページから読み取り)</h3>
+    <p class="sub" style="margin-bottom:24px">
+      下のランプは <code>http://127.0.0.1:8080/status</code> を直接読みに行きます。
+      既定ではセキュリティのため拒否されます (fail-closed) —
+      <code>gateway.status_public = true</code> を設定すると可視になります。
+      あなたのゲートウェイが丹麦 (表示) することを選んだときだけ、このページは数字を見ます。
+    </p>
+    <div class="widget" id="widget">
+      <div class="row"><span class="lamp off">○</span> <span id="w-state">ゲートウェイを探しています…</span></div>
+      <div id="w-body" style="margin-top:10px; display:none;">
+        <div class="row"><span class="lamp" id="w-lamp-gate">○</span> leak gate <span id="w-gate">—</span></div>
+        <div class="row"><span class="lamp on">●</span> session <span id="w-scope">—</span> (mapping table: <span id="w-table">—</span> records)</div>
+        <div class="row"><span class="lamp" id="w-lamp-ner">○</span> ner <span id="w-ner">—</span> / dictionary <span id="w-dict">—</span> terms</div>
+        <div class="row"><span class="lamp on">●</span> gateway token <span id="w-token">—</span></div>
+        <div class="row"><span class="lamp on">●</span> requests <span id="w-req">—</span> / entities masked <span id="w-masked">—</span> / restored <span id="w-restored">—</span> / leak blocks <span id="w-blocks">—</span></div>
+      </div>
+      <div class="note" id="w-note">オフライン、または status_public 未許可 — どちらも想定どおりの挙動です。</div>
+    </div>
+  </div>
+</section>
+
+<section id="handoff">
+  <div class="wrap">
+    <h2>封筒 — 対応表は暗号文だけでチームに渡す</h2>
+    <p class="sub">
+      マッピングテーブルは再識別の鍵。平文で出る経路は原理的に存在しません。
+      共有は暗号化された「封筒」でのみ行われます:
+      argon2id による鍵導出 + XSalsa20-Poly1305 による封緘、
+      有効期限つき、パスフレーズ誤りでロック、使い捨て。
+    </p>
+    <div class="cols">
+      <div class="card">
+        <h4>送り手</h4>
+        <pre>curl -s -X POST http://127.0.0.1:8080/admin/export \
+  -H "Authorization: Bearer &lt;gateway.token&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{"passphrase": "&lt;チームのパスフレーズ&gt;"}' \
+  &gt; handoff.maskbox</pre>
+      </div>
+      <div class="card">
+        <h4>受け手</h4>
+        <pre>curl -s -X POST http://127.0.0.1:8080/admin/import \
+  -H "Authorization: Bearer &lt;gateway.token&gt;" \
+  -H "Content-Type: application/json" \
+  -d "$(jq '. + {passphrase:
+      "&lt;パスフレーズ&gt;"}' handoff.maskbox)"</pre>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:20px">
+      管理APIはループバック限定。ネットワークを渡るのは封筒ファイルだけです。
+      衝突するトークンIDは上書きされず競合として報告され、誤った人物への復元が構造的に起きません。
+    </p>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>導入 — 5分</h2>
+    <p class="sub">Python 3.12+ と uv があれば十分です。</p>
+    <pre>git clone &lt;このリポジトリ&gt; &amp;&amp; cd mask
+uv sync
+cp mask.toml.example mask.toml
+# mask.toml を編集: upstream.base_url / upstream.api_key
+uv run mask serve</pre>
+    <h3>クライアント側の設定 (一度だけ)</h3>
+    <table>
+      <tr><th>クライアント</th><th>設定</th></tr>
+      <tr><td>OpenAI 互換ハーネス / エージェント</td>
+      <td><code>base URL = http://127.0.0.1:8080/v1</code><br>
+          API key = 配布されたゲートウェイトークン (<code>sk-mask</code> 等のダミーでも可)</td></tr>
+      <tr><td>Claude Code など Anthropic プロトコル</td>
+      <td><code>ANTHROPIC_BASE_URL = http://127.0.0.1:8080</code><br>
+          <code>ANTHROPIC_API_KEY = ゲートウェイトークン</code></td></tr>
+      <tr><td>シェル (人間)</td>
+      <td><code>mask chat "…"</code> / <code>mask check "…"</code> / <code>mask status</code></td></tr>
+    </table>
+    <h3>辞書タイプ</h3>
+    <p class="sub">
+      <code>dictionary.tsv</code> に自分の用語を登録:
+      <code>person / org / location / address / phone / email / account</code>
+      。検出取りこぼしを見つけたら、ここに足して運用で強くしていきます。
+    </p>
+    <h3>テスト</h3>
+    <pre>uv run pytest    # カナリアテスト込み。上流に実値が出ないことがここで証明される</pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>mask — PII pseudonymization gateway. マッピングテーブルはプロセス内メモリのみ。</div>
+    <div>保証されること: セッションが検出した値は外部に出ない。保証できないこと: 一度も検出されていない値 (検出層の担当、カナリアが回帰ゲート)。</div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  // Live indicator widget. Reads the local gateway's /status directly.
+  // No external requests, no analytics, no storage — a page that practises
+  // what the tool preaches. Off/locked is a perfectly expected state.
+  var state = document.getElementById("w-state");
+  var body = document.getElementById("w-body");
+  var note = document.getElementById("w-note");
+  var URL_BASE = "http://127.0.0.1:8080";
+
+  function setText(id, v) { document.getElementById(id).textContent = v; }
+  function lamp(id, on) {
+    var el = document.getElementById(id);
+    el.textContent = on ? "●" : "○";
+    el.className = "lamp " + (on ? "on" : "off");
+  }
+
+  function render(snap) {
+    var p = snap.posture || {}, c = snap.counts || {};
+    body.style.display = "block";
+    note.textContent = "uptime " + Math.round(snap.uptime_seconds) + "s — " + URL_BASE + " より";
+    setText("w-state", "ゲートウェイが見えています");
+    lamp("w-lamp-gate", !!p.leak_gate_active);
+    setText("w-gate", String(p.leak_gate || "?") + (p.leak_gate_active ? "  (fail-closed)" : "  (warn のみ)"));
+    setText("w-scope", String(p.session_scope || "?"));
+    setText("w-table", String(p.mapping_records || 0));
+    lamp("w-lamp-ner", !!p.ner);
+    setText("w-ner", p.ner ? "on (ja_ginza)" : "off");
+    setText("w-dict", String(p.dictionary_terms || 0));
+    setText("w-token", p.gateway_token ? "required" : "not set (localhost のみ)");
+    setText("w-req", String(c.requests_total || 0));
+    setText("w-masked", String(c.entities_masked || 0));
+    setText("w-restored", String(c.tokens_restored || 0));
+    setText("w-blocks", String(c.leak_blocks || 0));
+  }
+
+  function offline() {
+    state.textContent = "ゲートウェイは応答しません (未起動か status_public 未許可)";
+    note.textContent = "mask serve を起動し、status_public = true で読み取りを許可できます。";
+  }
+
+  function poll() {
+    fetch(URL_BASE + "/status", { signal: AbortSignal.timeout(1500) })
+      .then(function (r) { return r.ok ? r.json() : offline(); })
+      .then(render)
+      .catch(offline);
+  }
+  poll();
+  setInterval(poll, 5000);
+})();
+</script>
+</body>
+</html>

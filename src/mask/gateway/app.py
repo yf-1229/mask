@@ -34,7 +34,19 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from nacl.exceptions import CryptoError
 
 from mask.detect.dictionary import UserDictionary
+from mask.gateway.agent import (
+    anthropic_stream_events,
+    anthropic_to_openai,
+    openai_to_anthropic,
+    restored_strings,
+)
 from mask.gateway.config import GatewayConfig
+from mask.gateway.indicators import (
+    Indicators,
+    RequestMeasure,
+    build_posture,
+    request_headers,
+)
 from mask.gateway.leakguard import find_header_leaks, find_leaks
 from mask.gateway.sharing import (
     EnvelopeExpired,
@@ -47,7 +59,9 @@ from mask.pipeline import Session
 logger = logging.getLogger("mask.gateway")
 
 # Request headers never forwarded upstream: the client's Authorization is a
-# dummy by design (the real key lives only in the gateway config).
+# dummy by design (the real key lives only in the gateway config). The
+# Anthropic-style slots (x-api-key / anthropic-* headers) are entry-protocol
+# headers: the gateway token rides in them, so they terminate here too.
 _HOP_BY_HOP = {
     "host",
     "authorization",
@@ -56,11 +70,24 @@ _HOP_BY_HOP = {
     "connection",
     "keep-alive",
     "accept-encoding",
+    "x-api-key",
+    "anthropic-version",
+    "anthropic-beta",
 }
 
+# Entry protocols served by the gateway; shown in the X-Mask-In header and
+# the /status snapshot so a user can see how agents and humans entered.
+ENTRY_OPENAI = "v1/chat"
+ENTRY_ANTHROPIC = "v1/messages"
+ENTRY_PASSTHROUGH = "passthrough"
 
-def _mask_text(text: str, session: Session) -> str:
+
+def _mask_text(
+    text: str, session: Session, measure: RequestMeasure | None = None
+) -> str:
     masked, result = session.masked(text)
+    if measure is not None:
+        measure.masked += len(result.entities)
     if result.entities:
         logger.info(
             "masked %d entities: %s",
@@ -70,13 +97,15 @@ def _mask_text(text: str, session: Session) -> str:
     return masked
 
 
-def _mask_content(content: Any, session: Session) -> Any:
+def _mask_content(
+    content: Any, session: Session, measure: RequestMeasure | None = None
+) -> Any:
     if isinstance(content, str):
-        return _mask_text(content, session)
+        return _mask_text(content, session, measure)
     if isinstance(content, list):
         return [
             (
-                {**part, "text": _mask_text(part["text"], session)}
+                {**part, "text": _mask_text(part["text"], session, measure)}
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
                 else part
             )
@@ -85,27 +114,33 @@ def _mask_content(content: Any, session: Session) -> Any:
     return content
 
 
-def _mask_strings(node: Any, session: Session) -> Any:
+def _mask_strings(
+    node: Any, session: Session, measure: RequestMeasure | None = None
+) -> Any:
     """Mask every string inside a parsed JSON argument blob."""
     if isinstance(node, str):
-        return _mask_text(node, session)
+        return _mask_text(node, session, measure)
     if isinstance(node, dict):
-        return {k: _mask_strings(v, session) for k, v in node.items()}
+        return {k: _mask_strings(v, session, measure) for k, v in node.items()}
     if isinstance(node, list):
-        return [_mask_strings(v, session) for v in node]
+        return [_mask_strings(v, session, measure) for v in node]
     return node
 
 
-def _mask_json_string(raw: str, session: Session) -> str:
+def _mask_json_string(
+    raw: str, session: Session, measure: RequestMeasure | None = None
+) -> str:
     """Mask a JSON-encoded string; non-JSON strings are masked as text."""
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return _mask_text(raw, session)
-    return json.dumps(_mask_strings(parsed, session), ensure_ascii=False)
+        return _mask_text(raw, session, measure)
+    return json.dumps(_mask_strings(parsed, session, measure), ensure_ascii=False)
 
 
-def _mask_tool_calls(tool_calls: Any, session: Session) -> Any:
+def _mask_tool_calls(
+    tool_calls: Any, session: Session, measure: RequestMeasure | None = None
+) -> Any:
     """Mask PII inside tool_calls[*].function.arguments."""
     if not isinstance(tool_calls, list):
         return tool_calls
@@ -120,14 +155,18 @@ def _mask_tool_calls(tool_calls: Any, session: Session) -> Any:
                 **call,
                 "function": {
                     **fn,
-                    "arguments": _mask_json_string(fn["arguments"], session),
+                    "arguments": _mask_json_string(fn["arguments"], session, measure),
                 },
             }
         out.append(call)
     return out
 
 
-def mask_chat_request(body: dict[str, Any], session: Session) -> dict[str, Any]:
+def mask_chat_request(
+    body: dict[str, Any],
+    session: Session,
+    measure: RequestMeasure | None = None,
+) -> dict[str, Any]:
     """Return a copy of the request body with PII in messages replaced."""
     masked = dict(body)
     messages = masked.get("messages")
@@ -135,28 +174,50 @@ def mask_chat_request(body: dict[str, Any], session: Session) -> dict[str, Any]:
         out = []
         for m in messages:
             if isinstance(m, dict):
-                m = {**m, "content": _mask_content(m.get("content"), session)}
+                m = {**m, "content": _mask_content(m.get("content"), session, measure)}
                 if "tool_calls" in m:
-                    m = {**m, "tool_calls": _mask_tool_calls(m["tool_calls"], session)}
+                    m = {
+                        **m,
+                        "tool_calls": _mask_tool_calls(
+                            m["tool_calls"], session, measure
+                        ),
+                    }
             out.append(m)
         masked["messages"] = out
     return masked
 
 
-def _restore_text(text: str, session: Session) -> str:
+def _restore_text(
+    text: str, session: Session, measure: RequestMeasure | None = None
+) -> str:
     restored = session.unmasked(text)
+    if measure is not None:
+        measure.observe_restore(restored)
     for warning in restored.warnings:
         logger.warning("restore: %s", warning)
     return restored.text
 
 
-def restore_chat_response(data: dict[str, Any], session: Session) -> dict[str, Any]:
+def restore_chat_response(
+    data: dict[str, Any],
+    session: Session,
+    measure: RequestMeasure | None = None,
+) -> dict[str, Any]:
     """Restore pseudonyms in choices[*].message.content, in place."""
     for choice in data.get("choices", []):
         message = choice.get("message") if isinstance(choice, dict) else None
         if isinstance(message, dict) and isinstance(message.get("content"), str):
-            message["content"] = _restore_text(message["content"], session)
+            message["content"] = _restore_text(message["content"], session, measure)
     return data
+
+
+def _fold_measure(app: FastAPI, measure: RequestMeasure) -> None:
+    """Fold a finished request's measurements into the process counters."""
+    ind = app.state.indicators
+    ind.incr("entities_masked", measure.masked)
+    ind.incr("tokens_restored", measure.restored)
+    ind.incr("tokens_fuzzy_repaired", measure.fuzzy_repaired)
+    ind.incr("tokens_unresolved", measure.unresolved)
 
 
 def _delta_content(chunk: dict[str, Any]) -> str:
@@ -200,6 +261,9 @@ def create_app(
         else UserDictionary()
     )
     app.state.dictionary = dictionary
+    # Reliability indicators: process-wide counters surfaced at /status and
+    # in X-Mask-* response headers. Counts only, never contents.
+    app.state.indicators = Indicators()
     # Handoff state, process-local by design: failed-passphrase attempts
     # per envelope fingerprint, and fingerprints of consumed (single-use)
     # envelopes. Restarting the gateway resets these, but the sealed
@@ -215,18 +279,49 @@ def create_app(
             return app.state.session
         return Session(dictionary=dictionary, use_ner=config.use_ner)
 
+    ind: Indicators = app.state.indicators
+
+    def _posture() -> dict[str, Any]:
+        """Live posture for /status; counts only, no contents."""
+        records = (
+            len(app.state.session.pseudonyms.records())
+            if config.session_scope == "global"
+            else 0
+        )
+        return build_posture(config, records, dictionary.size())
+
+    def _record(measure: RequestMeasure) -> None:
+        """Fold a finished request's measurements into the counters."""
+        ind.incr("entities_masked", measure.masked)
+        ind.incr("tokens_restored", measure.restored)
+        ind.incr("tokens_fuzzy_repaired", measure.fuzzy_repaired)
+        ind.incr("tokens_unresolved", measure.unresolved)
+
     def _authorized(request: Request) -> Response | None:
         """Gateway token check; unset token means no auth (localhost only).
 
-        The comparison is constant-time: the token is a long-lived shared
-        secret, so no early-exit string comparison.
+        The token may arrive as `Authorization: Bearer <token>` (OpenAI
+        style) or as `x-api-key: <token>` (Anthropic style): the same
+        secret protects both entrances. The comparison is constant-time:
+        the token is a long-lived shared secret, so no early-exit string
+        comparison.
         """
         if not config.gateway_token:
             return None
-        expected = f"Bearer {config.gateway_token}".encode("utf-8")
-        provided = request.headers.get("authorization", "").encode("utf-8")
-        if hmac.compare_digest(provided, expected):
+        expected = config.gateway_token.encode("utf-8")
+        provided = request.headers.get("authorization", "")
+        api_key = request.headers.get("x-api-key", "")
+        ok = False
+        if provided.startswith("Bearer "):
+            ok = hmac.compare_digest(
+                provided[len("Bearer "):].encode("utf-8"), expected
+            )
+        if not ok and api_key:
+            ok = hmac.compare_digest(api_key.encode("utf-8"), expected)
+        if ok:
             return None
+        ind.incr("auth_denied")
+        ind.incr("requests_blocked")
         return JSONResponse(
             status_code=401,
             content={
@@ -260,9 +355,13 @@ def create_app(
                 hashlib.sha256(leak.value.encode("utf-8")).hexdigest()[:12],
             )
         if config.leak_gate == "warn":
+            ind.incr("leak_warnings")
             return None
+        ind.incr("leak_blocks")
+        ind.incr("requests_blocked")
         return JSONResponse(
             status_code=400,
+            headers={"X-Mask-Leak-Blocked": "true"},
             content={
                 "error": {
                     "message": (
@@ -333,14 +432,36 @@ def create_app(
             "session_scope": config.session_scope,
         }
 
+    @app.get("/status")
+    async def status(request: Request) -> Response:
+        """Reliability indicators: posture + live counters.
+
+        Counts only — the response is designed to be publishable (website
+        widget, clipboard, chat). Gated by the gateway token like the proxy
+        entrances when one is set — unless `gateway.status_public = true`
+        explicitly opts into publishing: the snapshot is PII-free by
+        construction, and opting into publishing means exactly that.
+        """
+        if not config.status_public:
+            denied = _authorized(request)
+            if denied is not None:
+                return denied
+        snapshot = ind.snapshot(_posture())
+        headers = {"Cache-Control": "no-store"}
+        if config.status_public:
+            headers["Access-Control-Allow-Origin"] = "*"
+        return JSONResponse(snapshot, headers=headers)
+
     @app.post("/v1/chat/completions")
     async def chat_completions(request: Request) -> Response:
         denied = _authorized(request)
         if denied is not None:
             return denied
+        ind.incr("requests_total")
         body = await request.json()
         session = get_session()
-        masked = mask_chat_request(body, session)
+        measure = RequestMeasure()
+        masked = mask_chat_request(body, session, measure)
         headers = _upstream_headers(request, config)
         blocked = _gate(masked, session, headers, "chat/completions")
         if blocked is not None:
@@ -348,7 +469,10 @@ def create_app(
         url = "/chat/completions"
 
         if body.get("stream"):
-            return await _proxy_streaming(app, masked, headers, url, session)
+            ind.incr("stream_requests")
+            return await _proxy_streaming(
+                app, masked, headers, url, session, measure, ENTRY_OPENAI
+            )
 
         upstream = await app.state.http.post(url, json=masked, headers=headers)
         if upstream.status_code >= 400:
@@ -358,8 +482,138 @@ def create_app(
                 media_type=upstream.headers.get("content-type"),
             )
         data = upstream.json()
-        restore_chat_response(data, session)
-        return JSONResponse(data)
+        restore_chat_response(data, session, measure)
+        _record(measure)
+        return JSONResponse(
+            data, headers=request_headers(measure, config, ENTRY_OPENAI)
+        )
+
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> Response:
+        """Agent entrance: Anthropic Messages protocol (e.g. Claude Code).
+
+        The payload is translated to OpenAI chat for the upstream and flows
+        through exactly the same mask layer and outbound leak gate — there
+        is no second, weaker code path to the network. Responses are
+        restored (tool arguments included: they execute locally) and
+        translated back to the Anthropic shape. `stream: true` buffers the
+        upstream and emits a correct Anthropic SSE sequence in one shot
+        (Phase A parity).
+        """
+        denied = _authorized(request)
+        if denied is not None:
+            return denied
+        ind.incr("requests_total")
+
+        def _anthropic_error(
+            status_code: int, etype: str, message: str, **detail: Any
+        ) -> Response:
+            err: dict[str, Any] = {"type": etype, "message": message}
+            err.update(detail)
+            return JSONResponse(
+                status_code=status_code,
+                content={"type": "error", "error": err},
+            )
+
+        body: Any
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _anthropic_error(400, "invalid_request_error", "malformed JSON body")
+        if not isinstance(body, dict):
+            return _anthropic_error(400, "invalid_request_error", "invalid body")
+
+        session = get_session()
+        measure = RequestMeasure()
+        openai_body = anthropic_to_openai(body)
+        masked = mask_chat_request(openai_body, session, measure)
+        headers = _upstream_headers(request, config)
+        blocked = _gate(masked, session, headers, "v1/messages")
+        if blocked is not None:
+            # Re-wrap the gate decision in the Anthropic error envelope; the
+            # offending values go to the trusted local client only.
+            err = json.loads(blocked.body)["error"]
+            return _anthropic_error(
+                blocked.status_code,
+                "invalid_request_error",
+                err.get("message", "blocked by the mask gateway"),
+                mask_code=err.get("code"),
+                mask_fields=err.get("fields"),
+                mask_values=err.get("values"),
+            )
+
+        if openai_body.get("stream"):
+            ind.incr("stream_requests")
+            status_code, raw, collected, ct = await _collect_chat_stream(
+                app, masked, headers, "/chat/completions"
+            )
+            if status_code >= 400:
+                return Response(
+                    content=raw, status_code=status_code, media_type=ct
+                )
+            restored_text = _restore_text(collected["text"], session, measure)
+            tool_uses: list[dict[str, Any]] = []
+            for tc in collected["tool_calls"]:
+                fn = tc.get("function") or {}
+                raw_args = fn.get("arguments") or "{}"
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    args = {"_raw": raw_args}
+                tool_uses.append(
+                    {
+                        "id": tc.get("id") or "toolu_mask",
+                        "name": fn.get("name") or "",
+                        "input": restored_strings(args, session, measure),
+                    }
+                )
+            message = {
+                "id": collected["meta"].get("id") or "msg_mask",
+                "type": "message",
+                "role": "assistant",
+                "model": collected["meta"].get("model") or body.get("model") or "",
+                "content": [],
+                "stop_reason": "tool_use" if tool_uses else "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            }
+            _record(measure)
+            return Response(
+                content=anthropic_stream_events(
+                    message, restored_text, tool_uses
+                ),
+                media_type="text/event-stream",
+                headers=request_headers(measure, config, ENTRY_ANTHROPIC),
+            )
+
+        upstream = await app.state.http.post("/chat/completions", json=masked, headers=headers)
+        if upstream.status_code >= 400:
+            try:
+                err = upstream.json().get("error", {})
+                return _anthropic_error(
+                    upstream.status_code,
+                    "api_error",
+                    err.get("message", "upstream error"),
+                )
+            except (ValueError, AttributeError):
+                return _anthropic_error(
+                    upstream.status_code, "api_error", "upstream error"
+                )
+        data = upstream.json()
+        choices = data.get("choices") or [{}]
+        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+        message0 = choice0.get("message") if isinstance(choice0, dict) else {}
+        content = (
+            message0.get("content")
+            if isinstance(message0, dict) and isinstance(message0.get("content"), str)
+            else ""
+        )
+        restored_text = _restore_text(content, session, measure) if content else ""
+        out = openai_to_anthropic(data, restored_text, session, measure)
+        _record(measure)
+        return JSONResponse(
+            out, headers=request_headers(measure, config, ENTRY_ANTHROPIC)
+        )
 
     @app.post("/admin/export")
     async def admin_export(request: Request) -> Response:
@@ -386,6 +640,7 @@ def create_app(
             return _bad_request("ttl_seconds must be a positive integer")
         records = app.state.session.pseudonyms.export_records()
         envelope = seal({"v": 1, "records": records}, passphrase, ttl_seconds=ttl)
+        ind.incr("handoff_exports")
         logger.info("admin export: %d records sealed", len(records))
         return JSONResponse(
             {
@@ -430,6 +685,7 @@ def create_app(
         fingerprint = envelope_fingerprint(envelope)
         if fingerprint in app.state.handoff_consumed:
             logger.warning("admin import: envelope consumed (fp %s)", fingerprint[:12])
+            ind.incr("handoff_consumed")
             return JSONResponse(
                 status_code=410,
                 content={
@@ -445,6 +701,7 @@ def create_app(
         failures = app.state.handoff_failures
         if failures.get(fingerprint, 0) >= config.handoff_max_attempts:
             logger.warning("admin import: envelope locked (fp %s)", fingerprint[:12])
+            ind.incr("handoff_locks")
             return JSONResponse(
                 status_code=423,
                 content={
@@ -461,6 +718,7 @@ def create_app(
             payload = unseal(envelope, passphrase)
         except EnvelopeExpired:
             logger.warning("admin import: envelope expired (fp %s)", fingerprint[:12])
+            ind.incr("handoff_expired")
             return JSONResponse(
                 status_code=410,
                 content={
@@ -481,6 +739,7 @@ def create_app(
                 max(remaining, 0),
             )
             if remaining <= 0:
+                ind.incr("handoff_locks")
                 return JSONResponse(
                     status_code=423,
                     content={
@@ -530,6 +789,7 @@ def create_app(
                 conflicts.append(token)
         # single use: this envelope will never import again
         app.state.handoff_consumed.add(fingerprint)
+        ind.incr("handoff_imports")
         logger.info("admin import: %s", counts)  # counts only, never values
         return JSONResponse({"result": counts, "conflicts": conflicts})
 
@@ -550,9 +810,12 @@ def create_app(
         denied = _authorized(request)
         if denied is not None:
             return denied
+        ind.incr("requests_total")
         route = f"/{path}"
         if route not in config.passthrough_allowlist:
             logger.warning("passthrough denied: %s", route)
+            ind.incr("paths_denied")
+            ind.incr("requests_blocked")
             return JSONResponse(
                 status_code=403,
                 content={
@@ -592,27 +855,30 @@ def create_app(
     return app
 
 
-async def _proxy_streaming(
+async def _collect_chat_stream(
     app: FastAPI,
     masked_body: dict[str, Any],
     headers: dict[str, str],
     url: str,
-    session: Session,
-) -> Response:
-    """Buffer the upstream SSE stream, restore it whole, emit one chunk."""
+) -> tuple[int, bytes, dict[str, Any]]:
+    """Buffer an upstream OpenAI SSE stream to completion.
+
+    Returns (status, raw_body, collected, content_type) where `collected` is
+    populated only on 200: {"meta": {...}, "text": str, "tool_calls": [merged calls]}.
+    Tool-call fragments are stitched by index so the merged arguments JSON
+    survives chunk boundaries; masking already happened upstream of this.
+    """
     req = app.state.http.build_request("POST", url, json=masked_body, headers=headers)
     upstream = await app.state.http.send(req, stream=True)
     if upstream.status_code >= 400:
         content = await upstream.aread()
+        ct = upstream.headers.get("content-type", "application/json")
         await upstream.aclose()
-        return Response(
-            content=content,
-            status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type"),
-        )
+        return upstream.status_code, content, {}, ct
 
     meta: dict[str, Any] = {}
     parts: list[str] = []
+    tool_calls: dict[int, dict[str, Any]] = {}
     try:
         async for line in upstream.aiter_lines():
             if not line.startswith("data:"):
@@ -625,29 +891,97 @@ async def _proxy_streaming(
                 if chunk.get(key) is not None:
                     meta.setdefault(key, chunk[key])
             parts.append(_delta_content(chunk))
+            for choice in chunk.get("choices", []):
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                for tc in delta.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    idx = int(tc.get("index", 0))
+                    acc = tool_calls.setdefault(
+                        idx, {"id": "", "type": "function", "function": {}}
+                    )
+                    if tc.get("id"):
+                        acc["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        # first fragment carries the (possibly cut) name
+                        acc["function"]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        acc["function"]["arguments"] = (
+                            acc["function"].get("arguments", "") + fn["arguments"]
+                        )
     finally:
         await upstream.aclose()
 
-    restored = _restore_text("".join(parts), session)
+    merged = [
+        {
+            "id": tc["id"],
+            "type": "function",
+            "function": tc["function"],
+        }
+        for _, tc in sorted(tool_calls.items())
+        if tc["function"].get("name") or tc["function"].get("arguments")
+    ]
+    collected = {"meta": meta, "text": "".join(parts), "tool_calls": merged}
+    return 200, b"", collected, ""
+
+
+async def _proxy_streaming(
+    app: FastAPI,
+    masked_body: dict[str, Any],
+    headers: dict[str, str],
+    url: str,
+    session: Session,
+    measure: RequestMeasure | None = None,
+    entry: str = ENTRY_OPENAI,
+) -> Response:
+    """Buffer the upstream SSE stream, restore it whole, emit OpenAI chunks."""
+    measure = measure or RequestMeasure()
+    status, raw, collected, ct = await _collect_chat_stream(
+        app, masked_body, headers, url
+    )
+    if status >= 400:
+        return Response(content=raw, status_code=status, media_type=ct)
+
+    restored = _restore_text(collected["text"], session, measure)
+    _fold_measure(app, measure)
+    meta = collected["meta"]
     meta["object"] = "chat.completion.chunk"
+    tool_calls = collected["tool_calls"]
+    finish_reason = "tool_calls" if tool_calls else "stop"
 
     def generate():
         first = {
             **meta,
-            "choices": [
+            "choices": [],
+        }
+        delta: dict[str, Any] = {"role": "assistant", "content": restored}
+        if tool_calls:
+            first["choices"] = [
                 {
                     "index": 0,
-                    "delta": {"role": "assistant", "content": restored},
+                    "delta": {**delta, "tool_calls": tool_calls},
                     "finish_reason": None,
                 }
-            ],
-        }
+            ]
+        else:
+            first["choices"] = [
+                {"index": 0, "delta": delta, "finish_reason": None}
+            ]
         last = {
             **meta,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
         }
         yield _sse_line(first)
         yield _sse_line(last)
         yield _sse_line("[DONE]")
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers=request_headers(measure, app.state.config, entry),
+    )

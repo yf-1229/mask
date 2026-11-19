@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 mask-server = "mask.gateway:main"
+mask = "mask.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

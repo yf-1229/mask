@@ -48,6 +48,10 @@ class GatewayConfig:
     # Admin endpoints (export/import) accept loopback clients only unless
     # this is set. The envelope file travels, not the admin API.
     admin_allow_remote: bool = False
+    # Publish /status with a CORS header so the indicator widget on the
+    # website can read it from a browser. Off by default: fail closed —
+    # counts are PII-free, but enabling cross-origin reads is a choice.
+    status_public: bool = False
 
     def __post_init__(self) -> None:
         if self.session_scope not in ("global", "request"):
@@ -64,6 +68,8 @@ class GatewayConfig:
             raise ValueError("gateway.handoff_max_attempts must be >= 1")
         if not isinstance(self.admin_allow_remote, bool):
             raise ValueError("gateway.admin_allow_remote must be a boolean")
+        if not isinstance(self.status_public, bool):
+            raise ValueError("gateway.status_public must be a boolean")
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "GatewayConfig":
@@ -95,6 +101,7 @@ class GatewayConfig:
             handoff_ttl_seconds=int(gateway.get("handoff_ttl_seconds", 3600)),
             handoff_max_attempts=int(gateway.get("handoff_max_attempts", 3)),
             admin_allow_remote=bool(gateway.get("admin_allow_remote", False)),
+            status_public=bool(gateway.get("status_public", False)),
         )
 
         if os.environ.get("MASK_SERVER_HOST"):
@@ -116,6 +123,10 @@ class GatewayConfig:
         if os.environ.get("MASK_ADMIN_ALLOW_REMOTE"):
             cfg.admin_allow_remote = (
                 os.environ["MASK_ADMIN_ALLOW_REMOTE"].lower() in ("1", "true", "yes")
+            )
+        if os.environ.get("MASK_STATUS_PUBLIC"):
+            cfg.status_public = (
+                os.environ["MASK_STATUS_PUBLIC"].lower() in ("1", "true", "yes")
             )
         return cfg
 
