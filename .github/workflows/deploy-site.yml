@@ -7,6 +7,9 @@ name: Deploy site
 # Required repository secrets:
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Workers Routes:Edit, Zone:Read
 #   CLOUDFLARE_ACCOUNT_ID  — the account that owns the branchead.com zone
+#
+# Without them the job skips instead of failing, so a fork or a fresh clone does
+# not show a red X for a deploy it was never able to perform.
 
 on:
   push:
@@ -31,11 +34,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for credentials
+        id: creds
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice title=Deploy skipped::CLOUDFLARE_API_TOKEN is not set for this repository."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.creds.outputs.skip == 'false'
         with:
           node-version: 22
 
       - name: Deploy
+        if: steps.creds.outputs.skip == 'false'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
