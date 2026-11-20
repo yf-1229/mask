@@ -8,3 +8,26 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Test / tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local configuration and data — never commit these.
+# mask.toml holds the upstream API key; dictionary.tsv holds your own terms;
+# *.maskbox files are handoff envelopes (ciphertext, but still not for git).
+mask.toml
+dictionary.tsv
+*.maskbox
+
+# Cloudflare / Wrangler
+.wrangler/
+.cloudflare/
+node_modules/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

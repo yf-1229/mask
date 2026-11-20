@@ -1,0 +1,61 @@
+name: Bug report
+description: Something behaves differently from what the docs claim.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **If this is a security issue — a real value
+        leaving the machine, a leak-gate bypass, an envelope that decrypts when
+        it should not — stop here and use
+        [private reporting](https://github.com/yf-1229/mask/security/advisories/new)
+        instead.**
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The smallest sequence that shows the problem. A failing test is ideal.
+        **Redact real personal data** — replace names, numbers and addresses with
+        synthetic ones.
+      placeholder: |
+        1. mask.toml: ...
+        2. uv run mask serve
+        3. curl ...
+        4. observed: ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "main @ d184568, or 0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your `mask.toml` with secrets redacted.
+      render: toml
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "Linux 6.x, Python 3.12.7, uv 0.11"
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: This report contains no real personal data.
+          required: true

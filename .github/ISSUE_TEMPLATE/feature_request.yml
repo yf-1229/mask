@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a capability, an entrance, or a detection improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that mask makes hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should happen instead. Concrete examples help.
+    validations:
+      required: true
+  - type: textarea
+    id: threat-model
+    attributes:
+      label: Threat-model impact
+      description: |
+        Does this widen what can leave the machine, add a path that skips the
+        masking layer or the leak gate, or expose values in logs or indicators?
+        "No" is a fine answer — say why.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other designs you rejected.
