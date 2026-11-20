@@ -5,6 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="mask — LLM API の前に置く PII 匿名化ゲートウェイ。実名は機械の外に出ない。">
 <title>mask — LLM API の前に置く PII 匿名化ゲートウェイ</title>
+<link rel="canonical" href="https://branchead.com/mask/">
+<meta name="theme-color" content="#0b0f14">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2335d0ba'/%3E%3Ctext x='16' y='23' font-size='17' text-anchor='middle' fill='%2306231f' font-family='sans-serif' font-weight='700'%3E%E5%B0%81%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="mask">
+<meta property="og:title" content="mask — LLM API の前に置く PII 匿名化ゲートウェイ">
+<meta property="og:description" content="実名は、LLMに渡らない。mask が帰り道も保証する。OpenAI / Anthropic 互換のローカルゲートウェイが、PII を疑似名に置換し、応答を復元する。">
+<meta property="og:url" content="https://branchead.com/mask/">
+<meta property="og:image" content="https://branchead.com/mask/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="mask — 実名は、LLMに渡らない。">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="mask — LLM API の前に置く PII 匿名化ゲートウェイ">
+<meta name="twitter:description" content="実名は、LLMに渡らない。mask が帰り道も保証する。">
+<meta name="twitter:image" content="https://branchead.com/mask/og.png">
 <style>
   :root {
     --bg: #0b0f14;
@@ -92,15 +109,38 @@
     border-radius: 10px; padding: 16px 18px; overflow-x: auto;
     font-size: 13.5px; line-height: 1.7;
   }
-  .diagram {
-    margin: 36px 0 0; padding: 22px;
+  /* flow diagram — a grid, not ASCII art, so it cannot misalign across fonts */
+  .flow {
+    margin: 36px 0 0; padding: 26px 20px;
     background: var(--panel2); border: 1px solid var(--line); border-radius: 14px;
-    font-size: 13.5px; color: var(--muted);
-    white-space: pre; overflow-x: auto;
+    display: grid; grid-template-columns: 1fr auto 1.15fr auto 1fr;
+    grid-template-rows: auto auto; align-items: center; row-gap: 16px;
+    grid-template-areas:
+      "c a1 g a3 u"
+      "c a2 g a4 u";
   }
-  .diagram b { color: var(--text); font-weight: 600; }
-  .diagram .ok { color: var(--accent); }
-  .diagram .ng { color: var(--danger); }
+  .flow .node {
+    text-align: center;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel); padding: 14px 12px;
+  }
+  .flow .node.c { grid-area: c; }
+  .flow .node.g { grid-area: g; }
+  .flow .node.u { grid-area: u; }
+  .flow .ar.a1 { grid-area: a1; }
+  .flow .ar.a2 { grid-area: a2; }
+  .flow .ar.a3 { grid-area: a3; }
+  .flow .ar.a4 { grid-area: a4; }
+  .flow .node b { display: block; font-size: 14px; font-weight: 700; }
+  .flow .node span { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.5; margin-top: 4px; }
+  .flow .node.seal { border-color: var(--accent-dim); background: rgba(53, 208, 186, 0.06); }
+  .flow .node.seal b { color: var(--accent); font-family: var(--mono); }
+  .flow .ar { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 0 10px; }
+  .flow .ar-l { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .flow .ar-l.ng { color: var(--danger); }
+  .flow .ar-l.ok { color: var(--accent); }
+  .flow .ar-g { font-family: var(--mono); font-size: 13px; color: var(--accent-dim); }
+  .flow .ar-g.v { display: none; }
 
   /* sections */
   section { padding: 72px 0; border-bottom: 1px solid var(--line); }
@@ -158,6 +198,15 @@
   footer { padding: 48px 0 72px; color: var(--muted); font-size: 13.5px; }
   footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between; }
 
+  @media (max-width: 720px) {
+    .flow {
+      grid-template-columns: 1fr; row-gap: 0; padding: 20px 16px;
+      grid-template-areas: "c" "a1" "a2" "g" "a3" "a4" "u";
+    }
+    .flow .ar { padding: 10px 0; }
+    .flow .ar-g.h { display: none; }
+    .flow .ar-g.v { display: inline; }
+  }
   @media (max-width: 640px) {
     .hero h1 { font-size: 32px; }
     nav { display: none; }
@@ -175,6 +224,7 @@
       <a href="#indicators">インジケータ</a>
       <a href="#handoff">封筒</a>
       <a href="#quickstart">導入</a>
+      <a href="https://github.com/yf-1229/mask">GitHub ↗</a>
     </nav>
   </div>
 </header>
@@ -192,15 +242,39 @@
     </p>
     <div class="cta">
       <a class="btn primary" href="#quickstart">5分で試す</a>
+      <a class="btn" href="https://github.com/yf-1229/mask">ソースを読む (GitHub)</a>
       <a class="btn" href="#indicators">信頼性インジケータを見る</a>
     </div>
-    <div class="diagram"><b>LLMクライアント / エージェント / シェル</b>
- ──(<span class="ng">実名入り</span>)──▶ ┌──────────────┐
-                                 │  <b>mask gateway</b>  │         上流の出力
- ◀──(<b>実名に復元</b>)──         │ マスク・復元・  │ ◀─(疑似名)──┐
-                                 │ リークゲート・    │              │
-                                 │ インジケータ     │──(<span class="ok">疑似名のみ</span>)──▶ <b>LLM API</b>
-                                 └──────────────┘   実値は<span class="ng">絶対に通さない</span> (fail-closed)</div>
+    <div class="flow">
+      <div class="node c">
+        <b>LLMクライアント</b>
+        <span>エージェント / シェル</span>
+      </div>
+      <div class="ar a1">
+        <span class="ar-l ng">実名入り</span>
+        <span class="ar-g h">──▶</span><span class="ar-g v">▼</span>
+      </div>
+      <div class="ar a2">
+        <span class="ar-l">実名に復元</span>
+        <span class="ar-g h">◀──</span><span class="ar-g v">▲</span>
+      </div>
+      <div class="node g seal">
+        <b>mask gateway</b>
+        <span>マスク・復元・リークゲート・インジケータ</span>
+      </div>
+      <div class="ar a3">
+        <span class="ar-l ok">疑似名のみ</span>
+        <span class="ar-g h">──▶</span><span class="ar-g v">▼</span>
+      </div>
+      <div class="ar a4">
+        <span class="ar-l">疑似名</span>
+        <span class="ar-g h">◀──</span><span class="ar-g v">▲</span>
+      </div>
+      <div class="node u">
+        <b>LLM API</b>
+        <span>実値は通さない (fail-closed)</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -243,8 +317,8 @@ $ mask check "090-1234-5678 ..."
         設定方法・保証の範囲・封筒による対応表の受け渡しまで、
         ブラウザから確認できます。</p>
         <pre>site/index.html   # 静的・単一ファイル・外部 CDN ゼロ
-                  # (このツールの思想どおり、
-                  #  このページ自体が外に要求を出しません)</pre>
+                  # CSP で外部リクエストを遮断
+                  # (エッジが差し込む RUM ビーコンも遮断)</pre>
       </div>
     </div>
   </div>
@@ -311,7 +385,11 @@ mask gateway — reliability indicators
       下のランプは <code>http://127.0.0.1:8080/status</code> を直接読みに行きます。
       既定ではセキュリティのため拒否されます (fail-closed) —
       <code>gateway.status_public = true</code> を設定すると可視になります。
-      あなたのゲートウェイが丹麦 (表示) することを選んだときだけ、このページは数字を見ます。
+      あなたのゲートウェイが開示 (表示) することを選んだときだけ、このページは数字を見ます。
+      なお、このページを https で配信している場合 (公開サイト)、ブラウザは
+      <code>http://127.0.0.1</code> への読み取りを mixed content として遮断します。
+      その場合はリポジトリの <code>site/index.html</code> をローカルで開くか、
+      ターミナルで <code>mask status</code> を実行してください。
     </p>
     <div class="widget" id="widget">
       <div class="row"><span class="lamp off">○</span> <span id="w-state">ゲートウェイを探しています…</span></div>
@@ -365,7 +443,7 @@ mask gateway — reliability indicators
   <div class="wrap">
     <h2>導入 — 5分</h2>
     <p class="sub">Python 3.12+ と uv があれば十分です。</p>
-    <pre>git clone &lt;このリポジトリ&gt; &amp;&amp; cd mask
+    <pre>git clone https://github.com/yf-1229/mask.git &amp;&amp; cd mask
 uv sync
 cp mask.toml.example mask.toml
 # mask.toml を編集: upstream.base_url / upstream.api_key
@@ -397,6 +475,7 @@ uv run mask serve</pre>
   <div class="wrap">
     <div>mask — PII pseudonymization gateway. マッピングテーブルはプロセス内メモリのみ。</div>
     <div>保証されること: セッションが検出した値は外部に出ない。保証できないこと: 一度も検出されていない値 (検出層の担当、カナリアが回帰ゲート)。</div>
+    <div><a href="https://github.com/yf-1229/mask">github.com/yf-1229/mask</a> · MIT License · このページは外部リクエストを出しません (CSP で強制)</div>
   </div>
 </footer>
 
@@ -442,14 +521,27 @@ uv run mask serve</pre>
     note.textContent = "mask serve を起動し、status_public = true で読み取りを許可できます。";
   }
 
+  // A page served over https cannot read http://127.0.0.1 — the browser blocks
+  // it as mixed content. Say so plainly instead of pretending to poll.
+  function blockedByBrowser() {
+    state.textContent = "公開ページからはローカルゲートウェイを読めません";
+    note.textContent = "https のページから http://127.0.0.1 への読み取りはブラウザが遮断します (mixed content)。"
+      + "リポジトリの site/index.html をローカルで開くか、ターミナルで `mask status` を実行してください。";
+  }
+
   function poll() {
     fetch(URL_BASE + "/status", { signal: AbortSignal.timeout(1500) })
       .then(function (r) { return r.ok ? r.json() : offline(); })
       .then(render)
       .catch(offline);
   }
-  poll();
-  setInterval(poll, 5000);
+
+  if (window.location.protocol === "https:") {
+    blockedByBrowser();
+  } else {
+    poll();
+    setInterval(poll, 5000);
+  }
 })();
 </script>
 </body>

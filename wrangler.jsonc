@@ -1,0 +1,25 @@
+{
+  // Static site for the mask project, served at https://branchead.com/mask/
+  //
+  // The site is a single self-contained HTML file (plus an OGP image and a 404
+  // page). It is deployed as an assets-only Worker on a path route, so the
+  // apex site (branchead.com, a different Worker) is untouched: the more
+  // specific route pattern wins.
+  //
+  //   npx wrangler deploy
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "mask-site",
+  "compatibility_date": "2026-11-20",
+  "assets": {
+    "directory": "./site",
+    "base_path": "/mask",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    {
+      "pattern": "branchead.com/mask*",
+      "zone_name": "branchead.com"
+    }
+  ]
+}

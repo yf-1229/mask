@@ -1,0 +1,16 @@
+# Security headers for the mask site.
+#
+# Paths use the public URL path (the Worker mounts the assets at /mask via
+# assets.base_path), so the pattern is /mask/*.
+#
+# The CSP is deliberately strict: this page is a single file with inline style
+# and script, no fonts, no images beyond its own OGP card, and its only network
+# call is to a local gateway. "No external requests" is enforced, not just
+# promised.
+
+/mask/*
+  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src http://127.0.0.1:8080; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
