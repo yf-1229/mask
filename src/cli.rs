@@ -18,7 +18,7 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
@@ -116,6 +116,9 @@ enum Command {
         /// port (overrides config/env)
         #[arg(long)]
         port: Option<u16>,
+        /// start the gateway even though this shell belongs to an AI agent
+        #[arg(long)]
+        allow_agent_host: bool,
     },
 }
 
@@ -146,6 +149,7 @@ async fn run(cli: Cli) -> Result<i32> {
         log_level,
         host,
         port,
+        allow_agent_host,
     } = &cli.command
     {
         init_tracing(log_level);
@@ -156,6 +160,7 @@ async fn run(cli: Cli) -> Result<i32> {
         if let Some(port) = port {
             config.port = *port;
         }
+        refuse_agent_host(&config, *allow_agent_host)?;
         crate::gateway::serve(config).await?;
         return Ok(0);
     }
@@ -173,6 +178,31 @@ async fn run(cli: Cli) -> Result<i32> {
             cmd_status(&config, url.as_deref(), timeout, json, colorize).await
         }
         Command::Serve { .. } => unreachable!("handled above"),
+    }
+}
+
+/// The gateway is an operator-run process: it holds the upstream key and the
+/// live mapping table, so an AI agent's shell may not start it by accident.
+///
+/// Agents are welcome as *clients* of a gateway a human started. This check
+/// covers the other direction — an agent quietly standing up an instance with
+/// the human's credentials — and is deliberately loud and overridable rather
+/// than silent.
+fn refuse_agent_host(config: &GatewayConfig, allow_agent_host: bool) -> Result<()> {
+    if !config.agent_host_guard || allow_agent_host {
+        return Ok(());
+    }
+    if std::env::var("MASK_ALLOW_AGENT_HOST").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes"
+        )
+    }) {
+        return Ok(());
+    }
+    match crate::gateway::guard::agent_origin() {
+        Some(origin) => bail!("{}", crate::gateway::guard::agent_host_refusal(&origin)),
+        None => Ok(()),
     }
 }
 
@@ -318,6 +348,19 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
             "not set (localhost only)"
         }
     ));
+
+    // The admin channel: whether an operator token exists in this process. A
+    // green lamp means "the table leaves only if you ask from this terminal".
+    let admin = get_str(snapshot, "posture", "admin_channel").unwrap_or("off");
+    lines.push(format!(
+        "{} admin channel  {}",
+        light(admin == "human", colorize),
+        match admin {
+            "human" => "human (export/import need the terminal token)",
+            "closed" => "closed — no operator terminal (export/import refused)",
+            _ => "off (admin_require_human = false)",
+        }
+    ));
     lines.push(String::new());
 
     for (label, key) in [
@@ -327,6 +370,7 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
         ("leak blocks", "leak_blocks"),
         ("paths denied", "paths_denied"),
         ("auth denied", "auth_denied"),
+        ("admin refusals", "admin_gate_refusals"),
     ] {
         lines.push(format!(
             "  {label:<16}{}",

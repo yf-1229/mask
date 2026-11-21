@@ -1,10 +1,18 @@
 # mask gateway configuration
-# copy to mask.toml and edit. environment variables override this file:
+#
+# Where to put it — first match wins:
+#   --config <path>  >  $MASK_CONFIG  >  $XDG_CONFIG_HOME/mask/mask.toml
+#   (~/.config/mask/mask.toml)  >  ./mask.toml
+#
+# Prefer the config directory, mode 600: this file holds the upstream API key,
+# and a checkout is somewhere coding agents run. See AGENTS.md.
+#
+# environment variables override this file:
 #   MASK_SERVER_HOST / MASK_SERVER_PORT / MASK_UPSTREAM_BASE_URL / MASK_UPSTREAM_API_KEY
 #   MASK_GATEWAY_TOKEN / MASK_LEAK_GATE / MASK_STATUS_PUBLIC
 #   MASK_HANDOFF_TTL_SECONDS / MASK_HANDOFF_MAX_ATTEMPTS
 #   MASK_HANDOFF_KDF_OPSLIMIT / MASK_HANDOFF_KDF_MEMLIMIT
-#   MASK_ADMIN_ALLOW_REMOTE
+#   MASK_ADMIN_ALLOW_REMOTE / MASK_ADMIN_REQUIRE_HUMAN / MASK_AGENT_HOST_GUARD
 
 [server]
 host = "127.0.0.1"
@@ -31,5 +39,9 @@ handoff_max_attempts = 3        # パスフレーズ誤り回数。超えたら�
 handoff_kdf_opslimit = 3         # argon2id の反復回数 (既定: MODERATE)
 handoff_kdf_memlimit = 268435456 # argon2id のメモリ (バイト、256MiB)。下げると総当たりが安くなる
 admin_allow_remote = false       # export/import は localhost からのみ(true で解除)
+admin_require_human = true       # export/import には起動端末に出たトークン (x-mask-admin) も要求。
+                                 # 端末を持たない起動では管理チャネルは閉じたまま。false で解除
+agent_host_guard = true          # AI エージェントのシェル (VIBE_SESSION 等) からの
+                                 # `mask serve` を拒否。`mask serve --allow-agent-host` で解除
 status_public = false            # /status インジケータの公開(数字のみ)。
                                  # false なら /status は他の入口と同じく gateway.token 必須

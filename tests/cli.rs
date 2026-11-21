@@ -198,6 +198,9 @@ mod live {
         assert!(output.status.success(), "{stdout}");
         assert!(stdout.contains("leak gate"), "{stdout}");
         assert!(stdout.contains("fail-closed"), "{stdout}");
+        // The admin channel is part of the panel: an agent-written gateway
+        // (no terminal) must be visibly closed, not silently so.
+        assert!(stdout.contains("admin channel"), "{stdout}");
         assert!(
             !stdout.contains('\u{1b}'),
             "--no-color must strip ANSI: {stdout}"
@@ -267,4 +270,60 @@ mod live {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         assert!(stderr.contains("unreachable"), "{stderr}");
     }
+}
+
+#[test]
+fn serve_refuses_a_shell_that_belongs_to_an_agent() {
+    let output = binary()
+        .env("CLAUDECODE", "1")
+        .args(["serve"])
+        .output()
+        .expect("cannot run mask");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(stderr.contains("belongs to an AI agent"), "{stderr}");
+    assert!(stderr.contains("--allow-agent-host"), "{stderr}");
+}
+
+#[test]
+fn serve_starts_under_an_explicit_agent_override() {
+    // An override is a decision, not an accident: CLAUDECODE=1 plus
+    // --allow-agent-host must start the gateway.
+    let mut child = binary()
+        .env("CLAUDECODE", "1")
+        .args(["serve", "--port", "0", "--allow-agent-host"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("cannot run mask");
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let still_running = child.try_wait().expect("wait").is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(still_running, "serve exited instead of starting");
+}
+
+#[test]
+fn serve_starts_when_no_agent_owns_the_shell() {
+    // Under an agent (this test may itself run inside one) the ancestry walk
+    // finds the agent and the gateway must refuse; on a plain shell it starts.
+    // Either outcome is correct — what must not happen is the guard firing on a
+    // clean shell.
+    if mask::gateway::guard::agent_origin().is_some() {
+        return;
+    }
+    let mut child = binary()
+        .args(["serve", "--port", "0"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("cannot run mask");
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let still_running = child.try_wait().expect("wait").is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        still_running,
+        "serve exited on a shell with no agent marker"
+    );
 }

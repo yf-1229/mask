@@ -22,6 +22,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod guard;
 pub mod indicators;
 pub mod leakguard;
 pub mod sharing;
@@ -87,6 +88,10 @@ pub struct AppState {
     pub indicators: Arc<Indicators>,
     /// `Some` in global scope: one table for the whole process.
     pub session: Option<Arc<Mutex<Session>>>,
+    /// Operator token for `/admin/*`: minted at startup, printed to the
+    /// gateway's own terminal, never persisted. `None` closes the admin
+    /// channel (no terminal, or `gateway.admin_require_human = false`).
+    pub admin_human_token: Option<Arc<str>>,
     /// Failed-passphrase attempts per envelope fingerprint.
     pub handoff_failures: Arc<Mutex<HashMap<String, u32>>>,
     /// Fingerprints of consumed (single-use) envelopes.
@@ -155,12 +160,18 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
         None
     };
 
+    let state_admin_token: Option<Arc<str>> = config
+        .admin_human_token
+        .as_deref()
+        .map(Arc::from)
+        .filter(|token: &Arc<str>| !token.is_empty());
     let state = AppState {
         config: Arc::new(config),
         http,
         dictionary: Arc::new(dictionary),
         indicators: Arc::new(Indicators::new()),
         session,
+        admin_human_token: state_admin_token,
         handoff_failures: Arc::new(Mutex::new(HashMap::new())),
         handoff_consumed: Arc::new(Mutex::new(HashSet::new())),
     };
@@ -280,11 +291,34 @@ fn is_loopback(addr: Option<SocketAddr>) -> bool {
     }
 }
 
-/// Admin endpoints: disabled without a token, loopback-only by default. The
-/// envelope file travels between teammates; the admin API itself never needs to
-/// be reachable from the network.
+/// Admin endpoints: disabled without a token, loopback-only by default, and
+/// gated on the operator's own terminal. The envelope file travels between
+/// teammates; the admin API itself never needs to be reachable from the
+/// network — nor reachable from whatever else happens to run on this machine.
+///
+/// Four checks, cheapest first, each with its own refusal code:
+///
+/// 1. `Host` must be a loopback name ([`guard::host_is_local`]): a rebinding
+///    page cannot address the channel as `evil.example`.
+/// 2. `gateway.token` must be set and match — the shared secret a client
+///    already holds.
+/// 3. The client must be loopback unless `gateway.admin_allow_remote`.
+/// 4. With `gateway.admin_require_human` (the default), the request must carry
+///    the operator token printed on the gateway's terminal. A process that
+///    never had a terminal has no token to send, so the channel stays shut.
 fn admin_authorized(state: &AppState, request: &Request) -> Option<Response> {
+    if !guard::host_is_local(request.headers()) {
+        state.indicators.incr(Count::AdminGateRefusals);
+        state.indicators.incr(Count::RequestsBlocked);
+        tracing::warn!("admin refused: Host header is not a loopback name");
+        return Some(error_response(
+            StatusCode::FORBIDDEN,
+            "mask_admin_host",
+            "admin endpoints answer to loopback names only (localhost, 127.0.0.1)",
+        ));
+    }
     if state.config.gateway_token.is_empty() {
+        state.indicators.incr(Count::AdminGateRefusals);
         return Some(error_response(
             StatusCode::FORBIDDEN,
             "mask_admin_disabled",
@@ -297,6 +331,7 @@ fn admin_authorized(state: &AppState, request: &Request) -> Option<Response> {
             .get::<ConnectInfo<SocketAddr>>()
             .map(|info| info.0);
         if !is_loopback(client) {
+            state.indicators.incr(Count::AdminGateRefusals);
             tracing::warn!(?client, "admin refused from non-loopback client");
             return Some(error_response(
                 StatusCode::FORBIDDEN,
@@ -305,7 +340,38 @@ fn admin_authorized(state: &AppState, request: &Request) -> Option<Response> {
             ));
         }
     }
-    authorize(state, request)
+    let denied = authorize(state, request);
+    if denied.is_some() {
+        return denied;
+    }
+    if state.config.admin_require_human {
+        let Some(expected) = state.admin_human_token.as_deref() else {
+            state.indicators.incr(Count::AdminGateRefusals);
+            state.indicators.incr(Count::RequestsBlocked);
+            tracing::warn!("admin refused: no operator terminal, so no operator token exists");
+            return Some(error_response(
+                StatusCode::FORBIDDEN,
+                "mask_admin_closed",
+                "admin channel closed: this gateway has no operator terminal. Start `mask serve` from an interactive terminal, or set gateway.admin_require_human = false to opt out",
+            ));
+        };
+        let provided = request
+            .headers()
+            .get(guard::ADMIN_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !constant_time_eq(provided, expected) {
+            state.indicators.incr(Count::AdminGateRefusals);
+            state.indicators.incr(Count::RequestsBlocked);
+            tracing::warn!("admin refused: operator token missing or wrong");
+            return Some(error_response(
+                StatusCode::UNAUTHORIZED,
+                "mask_admin_no_human",
+                "admin endpoints require the operator token printed on the gateway's terminal, sent as x-mask-admin",
+            ));
+        }
+    }
+    None
 }
 
 // --- request plumbing --------------------------------------------------------
@@ -1515,13 +1581,31 @@ async fn proxy_streaming(
 // --- server ------------------------------------------------------------------
 
 /// Run the gateway until Ctrl-C.
-pub async fn serve(config: GatewayConfig) -> anyhow::Result<()> {
+pub async fn serve(mut config: GatewayConfig) -> anyhow::Result<()> {
     crate::install_crypto_provider();
-    let app = create_app(config.clone(), None);
+    // Bind before announcing anything: a token printed for a gateway that then
+    // fails to start is a token the human has written down for nothing.
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|error| anyhow::anyhow!("cannot bind {addr}: {error}"))?;
+    if config.admin_require_human && config.admin_human_token.is_none() {
+        match guard::mint_admin_token() {
+            Some(token) if guard::announce_operator_channel(&token) => {
+                // The token itself never reaches a log: only this line does.
+                tracing::info!("admin channel open (operator token printed to the terminal)");
+                config.admin_human_token = Some(token);
+            }
+            Some(_) => tracing::warn!(
+                "admin channel closed: no controlling terminal. Run `mask serve` from an \
+                 interactive terminal, or set gateway.admin_require_human = false"
+            ),
+            None => tracing::warn!(
+                "admin channel closed: the OS CSPRNG is unavailable, so no token could be minted"
+            ),
+        }
+    }
+    let app = create_app(config.clone(), None);
     let bound = listener.local_addr().unwrap_or_else(|_| {
         addr.parse()
             .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], config.port)))

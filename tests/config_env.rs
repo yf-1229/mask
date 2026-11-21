@@ -117,3 +117,40 @@ fn mask_config_env_selects_the_file() {
     std::env::remove_var("MASK_CONFIG");
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn the_operator_config_directory_outranks_the_working_directory() {
+    // The real file belongs in the operator's config directory, outside any
+    // checkout an agent writes to. This pins that precedence.
+    let _guard = env_lock();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("mask-xdg-{}", std::process::id()));
+    let mask_dir = dir.join("mask");
+    std::fs::create_dir_all(&mask_dir).expect("mkdir");
+    std::fs::write(mask_dir.join("mask.toml"), "[server]\nport = 4444\n").expect("write");
+    std::env::set_var("XDG_CONFIG_HOME", &dir);
+
+    assert_eq!(
+        mask::gateway::config::user_config_path(),
+        Some(mask_dir.join("mask.toml"))
+    );
+    let config = GatewayConfig::load(None).expect("load");
+    assert_eq!(config.port, 4444);
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_guard_configuration_can_be_set_from_the_environment() {
+    let _guard = env_lock();
+    std::env::set_var("MASK_ADMIN_REQUIRE_HUMAN", "false");
+    std::env::set_var("MASK_AGENT_HOST_GUARD", "0");
+
+    let config = GatewayConfig::load(None).expect("load");
+    assert!(!config.admin_require_human);
+    assert!(!config.agent_host_guard);
+
+    std::env::remove_var("MASK_ADMIN_REQUIRE_HUMAN");
+    std::env::remove_var("MASK_AGENT_HOST_GUARD");
+}

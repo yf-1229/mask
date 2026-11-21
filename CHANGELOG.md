@@ -7,6 +7,42 @@ Notable changes to `mask`. The guarantee is stable; the surface is versioned.
 First public release. The Rust rewrite ships as a single native binary for
 Windows, macOS and Linux.
 
+### The gateway stays in a human's hands
+
+- `mask serve` refuses to start when the environment says an AI agent owns the
+  shell (`VIBE_SESSION`, `CLAUDECODE`, `CODEX_SANDBOX`, `CURSOR_AGENT`,
+  `GEMINI_CLI`, `COPILOT_AGENT`, `OPENCODE_SESSION`, `AIDER_SESSION`), or when an
+  ancestor process is one (`/proc` walk on Linux, so clearing a marker variable
+  does not get around it). `--allow-agent-host` / `MASK_ALLOW_AGENT_HOST=1` is
+  the explicit override, and `gateway.agent_host_guard = false` records the
+  decision in the config
+- `/admin/export` and `/admin/import` now also require `x-mask-admin`: a token
+  minted at startup and printed **only** to the gateway's controlling terminal.
+  It is never written to disk, never logged, and never appears in `/status`. A
+  gateway with no terminal (systemd unit, CI, a pipe) has no token, so the admin
+  channel is closed. Opt out with `gateway.admin_require_human = false`
+- Admin requests whose `Host` header is not a loopback *address* are refused,
+  with its own code `mask_admin_host`: the name is parsed, so
+  `127.0.0.1.evil.example` does not pass, and a request with no `Host` header is
+  refused too (DNS rebinding, fail closed)
+- The token is minted after the listener binds (a token printed for a gateway
+  that never started is a token the human wrote down for nothing), and a
+  CSPRNG failure leaves the channel closed instead of aborting the process
+- `GatewayConfig`'s `Debug` is hand-written: the upstream key, the gateway token
+  and the operator token print as `<set>`, so one careless `debug!(?config)`
+  cannot leak them
+- `/status` gains `posture.admin_channel` (`human` / `closed` / `off`),
+  `posture.agent_host_guard`, and the `admin_gate_refusals` counter — numbers and
+  posture only, as before
+- Config resolution reaches the operator's directory first: `--config` >
+  `$MASK_CONFIG` > `$XDG_CONFIG_HOME/mask/mask.toml` (`~/.config/mask/mask.toml`)
+  > `./mask.toml`. A config carrying an upstream key that is readable beyond its
+  owner now logs a warning at load
+- New `AGENTS.md` (with `CLAUDE.md` importing it) states the contract for coding
+  agents, and `scripts/agent-guard.sh` enforces it before a command runs, wired
+  through `.vibe/hooks.toml` (Vibe) and `.claude/settings.json` (Claude Code).
+  Self-test: `sh scripts/agent-guard.sh --self-test`
+
 ### Native rewrite
 
 - The Python runtime is gone: `mask` is one self-contained executable

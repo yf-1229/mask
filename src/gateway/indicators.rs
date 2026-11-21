@@ -40,10 +40,11 @@ pub enum Count {
     HandoffLocks,
     HandoffExpired,
     HandoffConsumed,
+    AdminGateRefusals,
 }
 
 impl Count {
-    pub const ALL: [Count; 16] = [
+    pub const ALL: [Count; 17] = [
         Count::RequestsTotal,
         Count::RequestsBlocked,
         Count::EntitiesMasked,
@@ -60,6 +61,7 @@ impl Count {
         Count::HandoffLocks,
         Count::HandoffExpired,
         Count::HandoffConsumed,
+        Count::AdminGateRefusals,
     ];
 
     pub fn key(self) -> &'static str {
@@ -80,6 +82,7 @@ impl Count {
             Count::HandoffLocks => "handoff_locks",
             Count::HandoffExpired => "handoff_expired",
             Count::HandoffConsumed => "handoff_consumed",
+            Count::AdminGateRefusals => "admin_gate_refusals",
         }
     }
 
@@ -95,7 +98,7 @@ impl Count {
 #[derive(Debug)]
 pub struct Indicators {
     started_at: Instant,
-    values: [AtomicU64; 16],
+    values: [AtomicU64; 17],
 }
 
 impl Default for Indicators {
@@ -178,8 +181,33 @@ pub fn build_posture(
         "mapping_records": mapping_records,
         "gateway_token": !config.gateway_token.is_empty(),
         "admin_allow_remote": config.admin_allow_remote,
+        "admin_channel": admin_channel(config),
+        "agent_host_guard": config.agent_host_guard,
         "upstream": config.upstream_base_url,
     })
+}
+
+/// Whether the admin channel is open, closed, or opted out of.
+///
+/// A posture fact, not a secret: "human" means an operator token exists in this
+/// process, "closed" means `/admin/*` refuses everything (no operator terminal,
+/// no token, or no gateway token to begin with), "off" means
+/// `gateway.admin_require_human = false`.
+///
+/// The gateway-token case matters: without it `admin_authorized` refuses before
+/// the operator token is even consulted, so reporting "human" there would be a
+/// green lamp on a dead channel.
+fn admin_channel(config: &GatewayConfig) -> &'static str {
+    if !config.admin_require_human {
+        return "off";
+    }
+    if config.gateway_token.is_empty() {
+        return "closed";
+    }
+    match config.admin_human_token.as_deref() {
+        Some(token) if !token.is_empty() => "human",
+        _ => "closed",
+    }
 }
 
 /// `X-Mask-*` headers appended to every proxied response.

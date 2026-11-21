@@ -158,6 +158,27 @@ field, path or header. What is not: a value that was never detected (unknown
 unknowns) — that is the detection layer's job, and the canary corpus is the
 regression gate. Logs never contain real values (field paths and sha256 only).
 
+## Keeping the gateway out of an AI agent's hands
+
+mask is built for agents as *clients*: pointing a harness at a running gateway
+is the whole point. The opposite direction needs a wall, because the process a
+human started is where the upstream key and the live mapping table meet.
+
+Four gates. The operator token, the `Host` check and the repository hook fail
+closed on their own; the agent host guard refuses the default case and says so
+when it is overridden:
+
+| Gate | What it stops |
+|---|---|
+| `mask serve` refuses an agent's shell | An agent standing up an instance with your credentials: `VIBE_SESSION`, `CLAUDECODE`, `CODEX_SANDBOX` and friends are detected; `--allow-agent-host` is the explicit override |
+| Operator token on `/admin/*` | Any local process (agent, script, another user's shell) pulling the mapping table: the token is printed on the gateway's terminal only, and is absent when there is no terminal |
+| Loopback `Host` check | A DNS-rebinding page addressing the admin channel as `evil.example` (the name is parsed as an address, and a missing `Host` is refused too) |
+| Repo contract (`AGENTS.md`) + `scripts/agent-guard.sh` | An agent working in this checkout running `mask serve`, `curl :8080`, `cat mask.toml`, or `/admin/export` — denied before the command runs (Vibe and Claude Code hooks) |
+
+Posture is visible without opening anything: `/status` reports
+`posture.admin_channel` (`human` / `closed` / `off`), `posture.agent_host_guard`,
+and the `admin_gate_refusals` counter — numbers only, as everywhere else.
+
 ## Sharing the mapping table (encrypted handoff)
 
 The mapping table is the re-identification key. It is shared **only as
@@ -165,16 +186,25 @@ ciphertext (an envelope)**, and decryption completes inside the receiver's
 gateway.
 
 ```sh
-# Sender: seal the table with a passphrase (gateway.token required)
+# Sender: seal the table with a passphrase (gateway.token + operator token required)
 curl -s -X POST http://127.0.0.1:8080/admin/export \
-  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <gateway.token>" -H "x-mask-admin: <token on the gateway's terminal>" \
+  -H "Content-Type: application/json" \
   -d '{"passphrase": "<team passphrase>"}' > handoff.maskbox
 
 # Receiver: decrypt and merge into the local session — done
 curl -s -X POST http://127.0.0.1:8080/admin/import \
-  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <gateway.token>" -H "x-mask-admin: <token on the gateway's terminal>" \
+  -H "Content-Type: application/json" \
   -d "$(jq '. + {passphrase: "<passphrase>"}' handoff.maskbox)"
 ```
+
+- **Human in the loop**: `mask serve` mints an operator token and prints it to
+  the terminal it runs in — never to stdout, a log, or `/status`. Export and
+  import require it as `x-mask-admin`, so a copied `mask.toml`, a shell history
+  or an agent with this machine's credentials still cannot pull the table out.
+  A gateway started without a terminal (a service unit, CI) has no token: the
+  admin channel is **closed**, not open
 
 - Crypto: argon2id (passphrase → key, 256 MiB per attempt, MODERATE) plus
   XSalsa20-Poly1305 (authenticated). The envelope is ciphertext, so any transport
@@ -265,6 +295,8 @@ handoff_max_attempts = 3     # wrong passphrases before an envelope locks perman
 handoff_kdf_opslimit = 3     # argon2id passes (raise, never lower, on a capable host)
 handoff_kdf_memlimit = 268435456  # argon2id memory in bytes (256 MiB)
 admin_allow_remote = false   # export/import from localhost only (true lifts this)
+admin_require_human = true   # export/import also need the token printed on this terminal
+agent_host_guard = true      # refuse `mask serve` from an AI agent's shell
 status_public = false        # publish the /status snapshot (numbers only)
                              # false means /status requires gateway.token like any entrance
 ```
@@ -273,7 +305,14 @@ Environment variables override the file: `MASK_SERVER_HOST`, `MASK_SERVER_PORT`,
 `MASK_UPSTREAM_BASE_URL`, `MASK_UPSTREAM_API_KEY`, `MASK_GATEWAY_TOKEN`,
 `MASK_LEAK_GATE`, `MASK_HANDOFF_TTL_SECONDS`, `MASK_HANDOFF_MAX_ATTEMPTS`,
 `MASK_HANDOFF_KDF_OPSLIMIT`, `MASK_HANDOFF_KDF_MEMLIMIT`,
-`MASK_ADMIN_ALLOW_REMOTE`, `MASK_STATUS_PUBLIC`.
+`MASK_ADMIN_ALLOW_REMOTE`, `MASK_ADMIN_REQUIRE_HUMAN`, `MASK_AGENT_HOST_GUARD`,
+`MASK_ALLOW_AGENT_HOST`, `MASK_STATUS_PUBLIC`.
+
+The config is read from `--config <path>`, then `$MASK_CONFIG`, then
+`$XDG_CONFIG_HOME/mask/mask.toml` (`~/.config/mask/mask.toml`), then
+`./mask.toml`. Put the real one in the config directory, mode 600: outside any
+checkout, so a coding agent working in this repository is never one `read_file`
+away from your upstream key.
 
 Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` / `account`
 
@@ -293,7 +332,7 @@ Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` 
 ## Tests
 
 ```sh
-cargo test          # 135 tests
+cargo test          # 159 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```

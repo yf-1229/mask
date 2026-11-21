@@ -9,7 +9,7 @@ rejected even when they are convenient.
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
 cargo build            # debug binary at target/debug/mask
-cargo test             # 135 tests
+cargo test             # 159 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```

@@ -116,6 +116,9 @@ pub fn base_config() -> GatewayConfig {
         use_ner: false,
         session_scope: SessionScope::Global,
         leak_gate: LeakGate::Block,
+        // The operator-terminal gate is exercised on its own in tests/guard.rs;
+        // the rest of the suite drives /admin directly, like a human's curl.
+        admin_require_human: false,
         ..GatewayConfig::default()
     }
 }

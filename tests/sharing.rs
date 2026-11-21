@@ -620,6 +620,9 @@ async fn admin_refuses_non_loopback_clients() {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/admin/export")
+        // A loopback name, so this test exercises the peer check rather than
+        // the Host check (which refuses a missing Host of its own accord).
+        .header("host", "localhost")
         .header("content-type", "application/json")
         .header("authorization", "Bearer team-secret")
         .body(Body::from(json!({"passphrase": "p"}).to_string()))

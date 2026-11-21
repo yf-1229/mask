@@ -38,6 +38,14 @@ For a value the session has **detected**:
 - it is not present in the mapping table's transport: handoff envelopes are
   ciphertext (argon2id + XSalsa20-Poly1305), expire, lock after repeated wrong
   passphrases, and are single-use
+- the mapping table does not leave the process **as a table** unless the
+  operator at the gateway's own terminal asks for it: `/admin/export` and
+  `/admin/import` require `x-mask-admin`, a token minted at startup and printed
+  only to the controlling terminal (never to stdout, a log, or `/status`).
+  Without a terminal there is no token, so the admin channel is closed rather
+  than open. (A client of the proxy can still resolve *individual* pseudonyms by
+  sending them back — that is what restoration is for; what the gate protects is
+  the bulk table, which is the difference between one value and every value)
 
 These are enforced structurally and covered by tests, including a canary suite
 that asserts no known PII appears in any byte a mock upstream received.
@@ -60,6 +68,41 @@ that asserts no known PII appears in any byte a mock upstream received.
 - **Allowlisted paths.** Paths added to `gateway.passthrough_allowlist` are
   forwarded unmasked (the leak gate still applies). Adding a schema that can
   carry PII (embeddings, …) weakens the guarantee
+- **An operator who switches the guards off.** `admin_require_human = false`,
+  `--allow-agent-host`, or an agent that runs inside the operator's terminal
+  session becomes indistinguishable from the operator. The guards stop the
+  defaults, not a human's deliberate choice
+- **An agent told to do operator work, or one that re-parents itself.** Nothing
+  here distinguishes "the human asked for the table" from "the agent decided
+  to", and the process-ancestry check can be stepped around by a double fork or
+  a service manager. `AGENTS.md` and `scripts/agent-guard.sh` make the boundary
+  explicit for coding agents working in this repository; they are a contract
+  plus a hook, not a sandbox
+- **Anything running as your user.** The config holds the upstream key, and a
+  process with your uid can read it, or start its own gateway pointing the
+  upstream at a listener that keeps the `Authorization` header. Keeping the
+  config out of the checkout (`~/.config/mask`, mode 600) raises the cost and
+  closes the accidental paths; it is not an isolation boundary. If you need one,
+  run the gateway as a different user
+
+## AI agents work on the code, not on the running instance
+
+`mask` exists to be used *by* agents, so the boundary is drawn around the
+operator's seat rather than around the API: a harness may talk to a gateway a
+human started, and a coding agent may edit, build and test this repository. It
+may not start the process, read `mask.toml`, call `/admin/*`, or loosen a
+guarantee. That contract lives in `AGENTS.md` (read by Vibe, Claude Code, Codex
+and others) and is enforced before the command runs by `scripts/agent-guard.sh`
+through Vibe hooks and `.claude/settings.json` — which load only in a folder the
+human has marked trusted, so treat them as the visible half, not the fence.
+
+The server-side half: the operator token and the loopback `Host` check do not
+depend on any cooperation at all, and the agent host guard inspects the
+environment *and* the parent process chain (`/proc` on Linux), so clearing a
+marker variable does not get around it. All three are still fences around the
+defaults, not a sandbox against a same-uid process that means it: the ancestry
+walk can be defeated by a double fork, and anything running as your user can
+read your config if it decides to.
 
 ## Threat model in one line
 
@@ -83,3 +126,16 @@ machine, or a provider that misuses what it receives.
 - Leave `handoff_kdf_opslimit` / `handoff_kdf_memlimit` at their defaults unless
   the host genuinely cannot afford 256 MiB per attempt: every step down makes
   offline guessing against a copied envelope cheaper
+- Keep `admin_require_human = true` and start `mask serve` from an interactive
+  terminal; a service manager gives it no terminal, which closes `/admin/*`
+- Keep `agent_host_guard = true`; reach for `--allow-agent-host` only when the
+  gateway really is agent-hosted, and say so in the config rather than in a
+  shell history
+- Keep the real config in `~/.config/mask/mask.toml` with mode `600`, not in a
+  checkout: an agent working in the repository then has to cross a directory
+  boundary that agent harnesses refuse by default
+- If you let coding agents work in this repository, keep `AGENTS.md`,
+  `scripts/agent-guard.sh`, `.vibe/` and `.claude/` in the tree and review any
+  change to them — they are the before-the-fact half of this list
+- Read `/status` after a session: `posture.admin_channel` should read `human`
+  while you are serving, and `admin_gate_refusals` should stay at zero

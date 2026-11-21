@@ -133,22 +133,52 @@ mask serve                            # ゲートウェイ起動
 これは検出層の担当で、カナリアコーパスが回帰ゲートになる。
 ログには実値を書かない (フィールドパスと sha256 のみ)。
 
+## 稼働中のゲートウェイを AI エージェントから守る
+
+mask はエージェントを*クライアント*として迎える設計です (ハーネスの base URL を
+向けるのが本来の使い方)。逆方向には壁が要ります。人間が起動したプロセスこそ、
+上流 API キーと生きた対応表が交わる場所だからです。
+
+4つのゲートのうち、オペレータトークン・`Host` 検査・リポジトリ側フックは
+それ単体で fail-closed。エージェント起動ガードは既定ケースを拒否し、解除時は
+解除したことを明示します:
+
+| ゲート | 何を止めるか |
+|---|---|
+| `mask serve` がエージェントのシェルを拒否 | エージェントがあなたの資格情報で勝手に起動すること。`VIBE_SESSION` / `CLAUDECODE` / `CODEX_SANDBOX` 等を検出し、`--allow-agent-host` が明示的な解除手段 |
+| `/admin/*` のオペレータトークン | 任意のローカルプロセス (エージェント、スクリプト、別ユーザのシェル) が対応表を持ち出すこと。トークンは起動端末にしか現れず、端末がなければ存在しない |
+| ループバック `Host` 検査 | DNS リバインディングのページが `evil.example` として管理チャネルを叩くこと (名前はアドレスとして解釈し、`Host` 欠落も拒否) |
+| リポジトリ契約 (`AGENTS.md`) + `scripts/agent-guard.sh` | このリポジトリで作業するエージェントが `mask serve`・`curl :8080`・`cat mask.toml`・`/admin/export` を実行すること。コマンド実行前に拒否 (Vibe / Claude Code のフック) |
+
+状態は何も開かずに確認できます: `/status` の `posture.admin_channel`
+(`human` / `closed` / `off`)、`posture.agent_host_guard`、
+`admin_gate_refusals` カウンタ (いずれも数値のみ)。
+
 ## 対応表の共有 (暗号化ハンドオフ)
 
 マッピングテーブルは再識別の鍵。共有は**暗号文 (封筒)** でのみ行い、
 受け手のゲートウェイで復号まで完了する。
 
 ```sh
-# 送り手: 対応表をパスフレーズで封緘 (gateway.token 必須)
+# 送り手: 対応表をパスフレーズで封緘 (gateway.token + 端末のオペレータトークン)
 curl -s -X POST http://127.0.0.1:8080/admin/export \
-  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <gateway.token>" -H "x-mask-admin: <起動端末に出たトークン>" \
+  -H "Content-Type: application/json" \
   -d '{"passphrase": "<チームのパスフレーズ>"}' > handoff.maskbox
 
 # 受け手: 復号して自セッションに取り込み — これで完了
 curl -s -X POST http://127.0.0.1:8080/admin/import \
-  -H "Authorization: Bearer <gateway.token>" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <gateway.token>" -H "x-mask-admin: <起動端末に出たトークン>" \
+  -H "Content-Type: application/json" \
   -d "$(jq '. + {passphrase: "<パスフレーズ>"}' handoff.maskbox)"
 ```
+
+- **人間が輪の中にいる**: `mask serve` は起動時にオペレータトークンを発行し、
+  **起動した端末にだけ**表示する (stdout・ログ・`/status` には出さない)。
+  export/import はこれを `x-mask-admin` として要求するので、`mask.toml` の
+  コピーやシェル履歴、同じマシンの資格情報を持つエージェントからは
+  対応表を引き出せない。端末を持たない起動 (systemd・CI) ではトークンが
+  存在せず、管理チャネルは**閉じたまま**になる
 
 - 暗号: argon2id (パスフレーズ→鍵、256MiB/回のMODERATEグレード) +
   XSalsa20-Poly1305 (認証付き)。封筒は暗号文なのでどんな経路で渡しても
@@ -256,6 +286,8 @@ handoff_max_attempts = 3     # パスフレーズ誤り回数。超えたらそ�
 handoff_kdf_opslimit = 3     # argon2id の反復回数 (余力のあるホストでは上げる方向で)
 handoff_kdf_memlimit = 268435456  # argon2id のメモリ (バイト、256MiB)
 admin_allow_remote = false   # export/import は localhost からのみ (true で解除)
+admin_require_human = true   # export/import は起動端末に出たトークンも必須
+agent_host_guard = true      # AI エージェントのシェルからの `mask serve` を拒否
 status_public = false        # /status インジケータの公開 (数字のみ)
                              # false なら /status は他の入口と同じく gateway.token 必須
 ```
@@ -264,7 +296,14 @@ status_public = false        # /status インジケータの公開 (数字のみ
 `MASK_UPSTREAM_BASE_URL` / `MASK_UPSTREAM_API_KEY` / `MASK_GATEWAY_TOKEN` /
 `MASK_LEAK_GATE` / `MASK_HANDOFF_TTL_SECONDS` / `MASK_HANDOFF_MAX_ATTEMPTS` /
 `MASK_HANDOFF_KDF_OPSLIMIT` / `MASK_HANDOFF_KDF_MEMLIMIT` /
-`MASK_ADMIN_ALLOW_REMOTE` / `MASK_STATUS_PUBLIC`
+`MASK_ADMIN_ALLOW_REMOTE` / `MASK_ADMIN_REQUIRE_HUMAN` / `MASK_AGENT_HOST_GUARD` /
+`MASK_ALLOW_AGENT_HOST` / `MASK_STATUS_PUBLIC`
+
+設定ファイルの探索順: `--config <path>` → `$MASK_CONFIG` →
+`$XDG_CONFIG_HOME/mask/mask.toml` (`~/.config/mask/mask.toml`) → `./mask.toml`。
+実体は設定ディレクトリ (mode 600) に置くのが推奨です。チェックアウトの外なので、
+このリポジトリで作業するコーディングエージェントが `read_file` 一発で
+上流キーに届くことはありません。
 
 辞書タイプ: `person` / `org` / `location` / `address` / `phone` / `email` / `account`
 
@@ -284,7 +323,7 @@ status_public = false        # /status インジケータの公開 (数字のみ
 ## テスト
 
 ```sh
-cargo test          # 135 テスト
+cargo test          # 159 テスト
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```

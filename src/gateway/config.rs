@@ -2,6 +2,14 @@
 //!
 //! Precedence (lowest to highest):
 //!     defaults < mask.toml < MASK_* environment variables < CLI flags
+//!
+//! Which file is read (first match wins):
+//!     --config <path> > $MASK_CONFIG > $XDG_CONFIG_HOME/mask/mask.toml
+//!     (~/.config/mask/mask.toml) > ./mask.toml
+//!
+//! The operator's config directory outranks the working directory on purpose:
+//! a checkout is somewhere an AI agent writes, and the upstream key should not
+//! be reachable from there. See [`user_config_path`].
 
 use std::path::{Path, PathBuf};
 
@@ -56,7 +64,7 @@ impl LeakGate {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GatewayConfig {
     pub host: String,
     pub port: u16,
@@ -88,6 +96,57 @@ pub struct GatewayConfig {
     /// Publish /status with a CORS header so the indicator widget on the
     /// website can read it from a browser. Off by default: fail closed.
     pub status_public: bool,
+    /// Admin endpoints also require a token that only the gateway's own
+    /// terminal ever sees. On by default: the mapping table leaves the process
+    /// because a human asked for it, not because something could reach the
+    /// port. See [`super::guard`].
+    pub admin_require_human: bool,
+    /// Refuse `mask serve` when the shell belongs to an AI agent. On by
+    /// default; `--allow-agent-host` is the deliberate way out.
+    pub agent_host_guard: bool,
+    /// The operator token for this process. Minted at startup and printed to
+    /// the controlling terminal; never read from the file or the environment,
+    /// so no artefact an agent can read ever carries it.
+    pub admin_human_token: Option<String>,
+}
+
+/// Redacted on purpose: `tracing::debug!(?config)` is one careless line away,
+/// and this struct holds the upstream key, the client token and the operator
+/// token. Secrets print as `<set>`; nothing else is hidden.
+impl std::fmt::Debug for GatewayConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn secret(value: &str) -> &'static str {
+            if value.is_empty() {
+                "<unset>"
+            } else {
+                "<set>"
+            }
+        }
+        f.debug_struct("GatewayConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("upstream_base_url", &self.upstream_base_url)
+            .field("upstream_api_key", &secret(&self.upstream_api_key))
+            .field("use_ner", &self.use_ner)
+            .field("dictionary_path", &self.dictionary_path)
+            .field("session_scope", &self.session_scope)
+            .field("gateway_token", &secret(&self.gateway_token))
+            .field("passthrough_allowlist", &self.passthrough_allowlist)
+            .field("leak_gate", &self.leak_gate)
+            .field("handoff_ttl_seconds", &self.handoff_ttl_seconds)
+            .field("handoff_max_attempts", &self.handoff_max_attempts)
+            .field("handoff_kdf_opslimit", &self.handoff_kdf_opslimit)
+            .field("handoff_kdf_memlimit", &self.handoff_kdf_memlimit)
+            .field("admin_allow_remote", &self.admin_allow_remote)
+            .field("status_public", &self.status_public)
+            .field("admin_require_human", &self.admin_require_human)
+            .field("agent_host_guard", &self.agent_host_guard)
+            .field(
+                "admin_human_token",
+                &secret(self.admin_human_token.as_deref().unwrap_or("")),
+            )
+            .finish()
+    }
 }
 
 impl Default for GatewayConfig {
@@ -112,6 +171,9 @@ impl Default for GatewayConfig {
             handoff_kdf_memlimit: crate::gateway::sharing::KdfParams::MODERATE.memlimit,
             admin_allow_remote: false,
             status_public: false,
+            admin_require_human: true,
+            agent_host_guard: true,
+            admin_human_token: None,
         }
     }
 }
@@ -161,10 +223,13 @@ struct GatewaySection {
     handoff_kdf_memlimit: Option<u64>,
     admin_allow_remote: Option<bool>,
     status_public: Option<bool>,
+    admin_require_human: Option<bool>,
+    agent_host_guard: Option<bool>,
 }
 
 impl GatewayConfig {
-    /// Load config from `path`, `MASK_CONFIG`, or `./mask.toml` (if present).
+    /// Load config from `path`, `MASK_CONFIG`, the user config directory, or
+    /// `./mask.toml` (if present).
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let resolved = Self::resolve_path(path)?;
         match resolved {
@@ -173,6 +238,7 @@ impl GatewayConfig {
                     .with_context(|| format!("cannot read config {}", path.display()))?;
                 let mut config = Self::from_toml(&text)?;
                 config.apply_env();
+                warn_on_loose_permissions(&path, !config.upstream_api_key.is_empty());
                 Ok(config)
             }
             None => {
@@ -267,6 +333,12 @@ impl GatewayConfig {
             if let Some(value) = gateway.status_public {
                 config.status_public = value;
             }
+            if let Some(value) = gateway.admin_require_human {
+                config.admin_require_human = value;
+            }
+            if let Some(value) = gateway.agent_host_guard {
+                config.agent_host_guard = value;
+            }
         }
         Ok(config)
     }
@@ -330,6 +402,12 @@ impl GatewayConfig {
         if let Ok(value) = std::env::var("MASK_STATUS_PUBLIC") {
             self.status_public = env_bool(&value);
         }
+        if let Ok(value) = std::env::var("MASK_ADMIN_REQUIRE_HUMAN") {
+            self.admin_require_human = env_bool(&value);
+        }
+        if let Ok(value) = std::env::var("MASK_AGENT_HOST_GUARD") {
+            self.agent_host_guard = env_bool(&value);
+        }
     }
 
     fn resolve_path(path: Option<&Path>) -> Result<Option<PathBuf>> {
@@ -343,6 +421,21 @@ impl GatewayConfig {
             let path = PathBuf::from(env);
             if !path.exists() {
                 bail!("config file not found: {}", path.display());
+            }
+            return Ok(Some(path));
+        }
+        // The operator's own file wins over whatever sits in the working
+        // directory: a checkout is a place an agent writes to, the config
+        // directory is not (see AGENTS.md and SECURITY.md).
+        if let Some(path) = user_config_path().filter(|path| path.exists()) {
+            // Two configs is a confusing state: say which one won, every time.
+            let local = PathBuf::from(DEFAULT_CONFIG_NAME);
+            if local.exists() {
+                tracing::warn!(
+                    using = %path.display(),
+                    ignoring = %local.display(),
+                    "both a user config and ./mask.toml exist; the user config wins"
+                );
             }
             return Ok(Some(path));
         }
@@ -381,4 +474,64 @@ fn env_bool(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes"
     )
+}
+
+/// The operator's config file: `$XDG_CONFIG_HOME/mask/mask.toml`, falling back
+/// to `~/.config/mask/mask.toml` (`%APPDATA%\mask\mask.toml` on Windows).
+///
+/// Keeping the real file here, instead of in a checkout, means an agent working
+/// in the repository is never one `read_file` away from the upstream key: the
+/// path is outside the project, where agent harnesses deny access by default
+/// (see AGENTS.md).
+pub fn user_config_path() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir).join("mask").join(DEFAULT_CONFIG_NAME));
+        }
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let home = home.trim();
+    if home.is_empty() {
+        return None;
+    }
+    let base = if cfg!(windows) {
+        std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(home))
+    } else {
+        PathBuf::from(home).join(".config")
+    };
+    Some(base.join("mask").join(DEFAULT_CONFIG_NAME))
+}
+
+/// Warn when a config that carries an upstream key is readable by others.
+///
+/// Not an error: a shared machine may have reasons. But the key is the one
+/// secret mask cannot pseudonymize, and a mode that lets every process on the
+/// box read it makes the rest of the guarantees moot.
+fn warn_on_loose_permissions(path: &Path, carries_key: bool) {
+    if !carries_key {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                tracing::warn!(
+                    path = %path.display(),
+                    mode = %format!("{mode:o}"),
+                    "config file holds an upstream key and is readable beyond its owner; chmod 600 it"
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }

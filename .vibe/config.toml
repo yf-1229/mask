@@ -1,0 +1,69 @@
+# Project-local Vibe configuration for the mask repository.
+#
+# Purpose: keep an agent working on this checkout away from the operator's
+# running gateway. The hard stop is the `operator-guard` hook in
+# .vibe/hooks.toml (scripts/agent-guard.sh); these settings close the quiet
+# paths that would otherwise reach the same files. The contract itself is
+# AGENTS.md.
+
+[tools.bash]
+# Command prefixes refused before the allowlist is consulted: starting the
+# gateway is a human action (it holds the upstream key and the live table).
+denylist = [
+  "mask serve",
+  "mask server",
+  "mask chat",
+  "mask status",
+  "pkill -f mask",
+  "killall mask",
+]
+# Operator data: readable only after an explicit approval, never silently.
+sensitive_file_patterns = [
+  "mask.toml",
+  "**/mask.toml",
+  "dictionary.tsv",
+  "**/dictionary.tsv",
+  "*.maskbox",
+  "**/*.maskbox",
+  ".env",
+  ".env.*",
+]
+
+[tools.read_file]
+denylist = [
+  "mask.toml",
+  "**/mask.toml",
+  "**/.config/mask/**",
+  "dictionary.tsv",
+  "**/dictionary.tsv",
+  "*.maskbox",
+  "**/*.maskbox",
+  ".env",
+  ".env.*",
+]
+
+[tools.write_file]
+denylist = [
+  "mask.toml",
+  "**/mask.toml",
+  "**/.config/mask/**",
+  "dictionary.tsv",
+  "**/dictionary.tsv",
+  "*.maskbox",
+  "**/*.maskbox",
+  ".env",
+  ".env.*",
+]
+
+[tools.edit]
+denylist = [
+  "mask.toml",
+  "**/mask.toml",
+  "**/.config/mask/**",
+  "dictionary.tsv",
+  "**/dictionary.tsv",
+  "*.maskbox",
+  "**/*.maskbox",
+  ".env",
+  ".env.*",
+]

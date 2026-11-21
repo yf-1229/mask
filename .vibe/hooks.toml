@@ -1,0 +1,30 @@
+# Hooks that keep this checkout's agent out of the operator's running gateway.
+#
+# The rules are in AGENTS.md; the enforcement is scripts/agent-guard.sh. Both
+# entries run as a shell line in the session's working directory, so the paths
+# are relative to the repository root.
+#
+# `strict = true` on the tool hook matters: without it, a guard that crashes or
+# returns garbage is reported and then let through. With it, any failure of the
+# guard denies the call. The one deliberate exception is a host without
+# python3: the wrapper says so loudly and allows the call, because blocking
+# every shell command is a worse failure than an announced inactive guard.
+
+[[hooks]]
+name = "operator-guard"
+type = "pre_tool"
+# Every tool an agent can run a command or reach a file through: foreground and
+# background shells, the TypeScript sandbox (which can call any tool), MCP
+# servers, and the file tools. A guard that only covers `bash` is a guard with
+# a known way around it.
+match = "re:bash|process_start|process_write|process_stop|run_typescript|read_file|write_file|edit|bash_stdin|git_bash|powershell|mcp_.*"
+command = "sh scripts/agent-guard.sh"
+strict = true
+description = "Refuse commands and paths that would touch the running mask gateway"
+
+[[hooks]]
+name = "operator-contract"
+type = "session_start"
+# Every source: a resumed or forked session needs the boundary stated too.
+command = "sh scripts/agent-guard.sh"
+description = "Inject the AGENTS.md operator contract into the session"

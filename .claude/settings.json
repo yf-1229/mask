@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(mask serve:*)",
+      "Bash(mask server:*)",
+      "Bash(mask serve)",
+      "Bash(pkill -f mask:*)",
+      "Bash(killall mask:*)",
+      "Bash(curl*8080*)",
+      "Bash(wget*8080*)",
+      "Bash(nc*8080*)",
+      "Bash(socat*8080*)",
+      "Bash(*localhost:8080*)",
+      "Bash(*127.0.0.1:8080*)",
+      "Bash(*/admin/export*)",
+      "Bash(*/admin/import*)",
+      "Bash(mask chat:*)",
+      "Bash(mask status:*)",
+      "Read(./mask.toml)",
+      "Read(//**/mask.toml)",
+      "Read(~/.config/mask/**)",
+      "Read(./dictionary.tsv)",
+      "Read(~/**/dictionary.tsv)",
+      "Read(**/*.maskbox)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Edit(./mask.toml)",
+      "Edit(//**/mask.toml)",
+      "Edit(~/.config/mask/**)",
+      "Write(./mask.toml)",
+      "Write(~/.config/mask/**)",
+      "WebFetch(domain:localhost)",
+      "WebFetch(domain:127.0.0.1)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Write|Edit|MultiEdit|WebFetch|Glob|Grep|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh scripts/agent-guard.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh scripts/agent-guard.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
