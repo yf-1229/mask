@@ -1,0 +1,56 @@
+[package]
+name = "mask"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.82"
+description = "PII pseudonymization gateway for local/cloud LLMs — real names never reach the model"
+readme = "README.md"
+license = "MIT"
+authors = ["Yuta Fujiwara"]
+repository = "https://github.com/yf-1229/mask"
+homepage = "https://branchead.com/mask/"
+keywords = ["pii", "privacy", "llm", "gateway", "pseudonymization"]
+categories = ["command-line-utilities", "web-programming::http-server"]
+
+[lib]
+name = "mask"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mask"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.2"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls-native-roots-no-provider",
+] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
+xsalsa20poly1305 = "0.9"
+
+[dev-dependencies]
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

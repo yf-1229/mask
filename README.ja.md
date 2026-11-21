@@ -2,10 +2,12 @@
 
 [![CI](https://github.com/yf-1229/mask/actions/workflows/ci.yml/badge.svg)](https://github.com/yf-1229/mask/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-35d0ba.svg)](LICENSE)
+[![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-35d0ba.svg)](Cargo.toml)
+[![Windows · macOS · Linux](https://img.shields.io/badge/native-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-35d0ba.svg)](#セットアップ)
 
 **実名は、LLMに渡らない。mask が帰り道も保証する。**
 
-`mask` は LLM API の前に置くローカルゲートウェイです。ユーザーは普段どおり
+`mask` は LLM API の前に置くネイティブなゲートウェイです。ユーザーは普段どおり
 名前・電話番号・住所を入力し、外部に出るのは `⟦人名7⟧` のような不透明な疑似名だけ。
 応答は自動的に実名へ復元して戻ります。
 
@@ -14,6 +16,8 @@ LLMクライアント ──(実名入り)──> mask gateway ──(疑似名�
 LLMクライアント <──(実名に復元)── mask gateway <──(疑似名)── LLM API
 ```
 
+- **Windows / macOS (Intel・Apple silicon) / Linux (x86_64・aarch64) の
+  単一実行ファイル** — Python もインタプリタも OpenSSL も cmake も不要
 - OpenAI 互換 (`/v1/chat/completions`) と **Anthropic 互換 (`/v1/messages`)** の
   両プロトコルでエージェントを受け付けます (Claude Code は base URL を変えるだけ)
 - 本物の API キーはゲートウェイだけが持つ (クライアントにはダミーキーを配る)
@@ -46,17 +50,17 @@ English README: [README.md](README.md) ／ 公式サイト: **https://branchead.
   ツール引数はローカル実行のため**復元して**返します。ツール結果は
   次のターンで他の入力と同様にマスクされます
 - `stream: true` は上流をバッファして復元し、正しい Anthropic SSE
-  イベント列として返します (Phase A と同じ: 正確だが逐次ではない)
+  イベント列として返します (正確だが逐次ではない。逐次復元は未実装)
 - 認証は `Authorization: Bearer` と `x-api-key` の両スロットで受け付けます
 
 ### シェル入口 (`mask` コマンド)
 
 ```sh
-uv run mask chat "山田太郎さんに連絡して"     # 1往復。応答は復元済み
-uv run mask check "090-1234-5678 です"       # 事前確認: 何がマスクされるか (ネット不要)
-uv run mask status                           # 信頼性インジケータパネル
-uv run mask status --json                    # /status の生スナップショット
-uv run mask serve                            # ゲートウェイ起動 (mask-server と同じ)
+mask chat "山田太郎さんに連絡して"     # 1往復。応答は復元済み
+mask check "090-1234-5678 です"       # 事前確認: 何がマスクされるか (ネット不要)
+mask status                           # 信頼性インジケータパネル
+mask status --json                    # /status の生スナップショット
+mask serve                            # ゲートウェイ起動
 ```
 
 - `check` は検出のドライラン。stdout にマスク済みテキスト、stderr に
@@ -97,7 +101,7 @@ uv run mask serve                            # ゲートウェイ起動 (mask-se
    ```
    ● leak gate        block  (fail-closed)
    ● session          global  (mapping table: 2 records)
-   ● ner              ja_ginza detection on
+   ● ner              built-in name detection on
    ● dictionary       0 terms
    ● gateway token    required (both entrances)
      requests         2 / entities masked 2 / tokens restored 2 / unresolved 0
@@ -121,7 +125,8 @@ uv run mask serve                            # ゲートウェイ起動 (mask-se
 4. **ゲートウェイトークン** — `gateway.token` を設定すれば、クライアントは
    それを API キーとして送る必要がある。LAN 公開時の保護。照合は定数時間比較。
 5. **カナリアテスト** — モック上流が受け取った全バイトに既知 PII が含まれない
-   ことを検証する結合テスト (`test_gateway_guard.py`)。回帰は CI で止まります。
+   ことを検証する結合テスト (`tests/gateway.rs`、`tests/agent_entry.rs`)。
+   回帰は CI (Linux / macOS / Windows) で止まります。
 
 保証されること: セッションが検出した値は、どのフィールド・パス・ヘッダ経由でも
 外部に出ない。保証できないこと: 一度も検出されていない値 (未知の未知)。
@@ -157,6 +162,9 @@ curl -s -X POST http://127.0.0.1:8080/admin/import \
   (再 export) が必要。試行カウンタはプロセス内メモリのみ
 - **使い捨て**: import に成功した封筒は消費済みになり、二度と
   import できない (410)。渡し先が複数ならその人数分 export する
+- KDF コストは `gateway.handoff_kdf_opslimit` / `handoff_kdf_memlimit` で調整可
+  (256MiB/回を払えないホスト向け)。復号は封筒に記録されたコストを使うので、
+  他所で封緘された対応表もそのまま開けます
 - **管理APIはループバック限定** (既定): `gateway.admin_allow_remote = true`
   を明示しない限り、export/import は localhost からのみ受け付ける。
   ネットワークを渡るのは封筒ファイルだけ
@@ -177,17 +185,39 @@ curl -s -X POST http://127.0.0.1:8080/admin/import \
 可能性は、argon2id のコスト (1回あたり256MiB)・パスフレーズ強度・
 有効期限の短さで抑える。
 
+## 検出の仕組み (モデルダウンロードなし)
+
+Python 版の spaCy/ja_ginza パイプラインは、バイナリに同梱した依存なしの
+検出器に置き換わりました:
+
+1. **ルール** — メール、電話番号 (ハイフン・括弧・全角)、郵便住所、口座・
+   カード番号。境界ガードを明示しているので `2019-04-01` のような日付が
+   電話番号として拾われることはありません。
+2. **ユーザー辞書** — `dictionary.tsv` (`用語<TAB>タイプ`)。最長一致優先。
+   業務で重要な名前はここに入れます。
+3. **組み込みの人名検出** — 約300語の姓辞書 + 敬称・機能語で止まる名前拡張。
+   モデルファイル不要で起動は即時です。
+
+トレードオフも明記します: 統計的 NER モデルの方が未知の名前への再現率は高い。
+このツールが主張する再現率はカナリアコーパス (`tests/pipeline.rs`、
+`tests/gateway.rs`) で固定されており、取りこぼした名前は `dictionary.tsv` に
+入れるのが正解です (最高信頼の層で、同じスパンなら組み込み検出より優先)。
+
 ## セットアップ
+
+ビルド済みバイナリをリリースに添付しています (Linux x86_64/aarch64、
+macOS x86_64/aarch64、Windows x86_64)。自分でビルドするのも 1 コマンドです:
 
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
-uv sync
+cargo build --release          # target/release/mask(.exe)
 cp mask.toml.example mask.toml
 # mask.toml を編集: upstream.base_url / upstream.api_key
-uv run mask serve                 # (mask-server でも同じ)
+./target/release/mask serve
 ```
 
-Python 3.12+ と [uv](https://docs.astral.sh/uv/) が必要です。
+必要なのは [Rust ツールチェーン](https://rustup.rs) (1.82+) だけ。TLS は rustls、
+暗号は pure Rust、release プロファイルは LTO + strip 済み (約7MB)。
 
 ### クライアント側の設定 (一度だけ)
 
@@ -209,7 +239,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-..."          # 環境変数 MASK_UPSTREAM_API_KEY でも可
 
 [mask]
-use_ner = true              # ja_ginza による固有表現抽出
+use_ner = true              # 組み込みの人名検出 (モデルダウンロードなし)
 dictionary = "dictionary.tsv" # 追加辞書 (TSV: 用語<TAB>タイプ)
 
 [session]
@@ -223,6 +253,8 @@ passthrough_allowlist = ["/v1/models"]  # この他に通すパス。他はす�
 leak_gate = "block"          # "block": 実値残存で送信拒否 / "warn": ログのみ
 handoff_ttl_seconds = 3600   # 封筒の有効期限 (秒)。期限後は復号不可能
 handoff_max_attempts = 3     # パスフレーズ誤り回数。超えたらその封筒は恒久ロック
+handoff_kdf_opslimit = 3     # argon2id の反復回数 (余力のあるホストでは上げる方向で)
+handoff_kdf_memlimit = 268435456  # argon2id のメモリ (バイト、256MiB)
 admin_allow_remote = false   # export/import は localhost からのみ (true で解除)
 status_public = false        # /status インジケータの公開 (ウェブサイトのウィジェット用)
                              # false なら /status は他の入口と同じく gateway.token 必須
@@ -230,11 +262,13 @@ status_public = false        # /status インジケータの公開 (ウェブサ
 
 環境変数がファイルを上書きします: `MASK_SERVER_HOST` / `MASK_SERVER_PORT` /
 `MASK_UPSTREAM_BASE_URL` / `MASK_UPSTREAM_API_KEY` / `MASK_GATEWAY_TOKEN` /
-`MASK_LEAK_GATE` / `MASK_STATUS_PUBLIC`
+`MASK_LEAK_GATE` / `MASK_HANDOFF_TTL_SECONDS` / `MASK_HANDOFF_MAX_ATTEMPTS` /
+`MASK_HANDOFF_KDF_OPSLIMIT` / `MASK_HANDOFF_KDF_MEMLIMIT` /
+`MASK_ADMIN_ALLOW_REMOTE` / `MASK_STATUS_PUBLIC`
 
 辞書タイプ: `person` / `org` / `location` / `address` / `phone` / `email` / `account`
 
-## 現在の制限 (Phase A)
+## 現在の制限
 
 - `stream: true` は動作するが、upstream のストリームを全件バッファしてから
   復元済みで返す (OpenAI互換は 1 チャンク、Anthropic互換は正しいイベント列)。
@@ -244,14 +278,22 @@ status_public = false        # /status インジケータの公開 (ウェブサ
 - allowlist に追加したパスはマスクされずそのまま通る (リークゲートは効く)。
   PII を含みうるスキーマ (embeddings 等) を足す場合は注意。
 - base URL を変更できないクラウドサービス (ChatGPT web 等) は対象外。
+- 組み込みの人名検出は統計モデルではなく辞書ベースです。珍しい名前・
+  表記は `dictionary.tsv` への登録が必要です。
 
 ## テスト
 
 ```sh
-uv run pytest
+cargo test          # 135 テスト
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-118 テスト。上流に実値が出ないことを証明するカナリアスイートを含みます。
+検出ルール・辞書・復元層、組み込み人名検出、OpenAI/Anthropic 両入口
+(実ループバックのモック上流に対して)、リークゲート、デフォルト拒否ルーティング、
+インジケータ、暗号化ハンドオフ (暗号・期限・ロック・使い捨て・管理フロー)、
+TOML/環境変数設定、CLI を網羅。上流に実値が出ないことを証明する
+カナリアスイートを含みます。CI は Linux・macOS・Windows で実行します。
 
 ## 公式ウェブサイト
 
@@ -263,7 +305,8 @@ uv run pytest
 `gateway.status_public = true` の明示が必要 (fail-closed)。
 
 ```sh
-python3 -m http.server 8877 -d site    # 例: http://127.0.0.1:8877
+cargo run -- serve &                    # 数字の出どころになるゲートウェイ
+python3 -m http.server 8877 -d site     # 任意の静的ファイルサーバ: http://127.0.0.1:8877
 ```
 
 公開先は **https://branchead.com/mask/** — パスルート上の assets-only

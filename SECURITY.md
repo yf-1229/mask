@@ -23,8 +23,9 @@ days. This is a single-maintainer project; there is no bug bounty.
 
 ## Supported versions
 
-The project is pre-1.0 (Phase A). Only the `main` branch is supported; fixes
-land there and are not backported.
+Only the latest release is supported; fixes land on `main` and ship in the next
+tag. Prebuilt binaries for Windows, macOS and Linux are built from that same tag
+in CI, so what you run is what was tested.
 
 ## What mask guarantees
 
@@ -79,3 +80,6 @@ machine, or a provider that misuses what it receives.
 - Keep `handoff_ttl_seconds` short and share passphrases over a different channel
 - Never commit `mask.toml`, `dictionary.tsv` or `*.maskbox` — they are ignored by
   `.gitignore` for this reason
+- Leave `handoff_kdf_opslimit` / `handoff_kdf_memlimit` at their defaults unless
+  the host genuinely cannot afford 256 MiB per attempt: every step down makes
+  offline guessing against a copied envelope cheaper

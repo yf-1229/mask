@@ -2,6 +2,9 @@
 # copy to mask.toml and edit. environment variables override this file:
 #   MASK_SERVER_HOST / MASK_SERVER_PORT / MASK_UPSTREAM_BASE_URL / MASK_UPSTREAM_API_KEY
 #   MASK_GATEWAY_TOKEN / MASK_LEAK_GATE / MASK_STATUS_PUBLIC
+#   MASK_HANDOFF_TTL_SECONDS / MASK_HANDOFF_MAX_ATTEMPTS
+#   MASK_HANDOFF_KDF_OPSLIMIT / MASK_HANDOFF_KDF_MEMLIMIT
+#   MASK_ADMIN_ALLOW_REMOTE
 
 [server]
 host = "127.0.0.1"
@@ -12,7 +15,7 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 
 [mask]
-use_ner = true
+use_ner = true                   # 組み込みの人名検出 (モデルダウンロードなし)
 # dictionary = "dictionary.tsv"   # TSV: <term>\t<type>
 
 [session]
@@ -25,6 +28,8 @@ passthrough_allowlist = ["/v1/models"]   # 他のパスはすべて 403 で拒�
 leak_gate = "block"              # "block": 実値の残存を検出したら送信拒否 / "warn": ログのみ
 handoff_ttl_seconds = 3600       # 封筒の有効期限(秒)。期限後は復号不可能
 handoff_max_attempts = 3        # パスフレーズ誤り回数。超えたらその封筒は恒久ロック
+handoff_kdf_opslimit = 3         # argon2id の反復回数 (既定: MODERATE)
+handoff_kdf_memlimit = 268435456 # argon2id のメモリ (バイト、256MiB)。下げると総当たりが安くなる
 admin_allow_remote = false       # export/import は localhost からのみ(true で解除)
 status_public = false            # /status インジケータの公開(ウェブサイトのウィジェット用)。
                                  # false なら /status は他の入口と同じく gateway.token 必須

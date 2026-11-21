@@ -8,18 +8,21 @@ rejected even when they are convenient.
 
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
-uv sync
-uv run pytest
+cargo build            # debug binary at target/debug/mask
+cargo test             # 135 tests
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-Python 3.12+ and [uv](https://docs.astral.sh/uv/) are required. The test suite
-includes `ja_ginza` NER, so the first `uv sync` downloads a model.
+The [Rust toolchain](https://rustup.rs) (1.82+) is all you need: no C compiler
+step, no OpenSSL, no model download. The suite is a real loopback mock upstream,
+so it needs no network and no credentials.
 
 ## What a good change looks like
 
 - **Tests first.** Every behaviour change needs a test. Security-relevant
   behaviour needs a test that fails loudly if the guarantee breaks — see
-  `tests/test_gateway_guard.py` and `tests/canaries.py` for the pattern
+  `tests/gateway.rs` (canary corpus in `tests/common/mod.rs`) for the pattern
 - **No new low roads.** If you add an entrance, a protocol or a forwarded path,
   it must pass through the same masking layer, leak gate and indicators. A
   feature that bypasses them will not be merged
@@ -28,21 +31,25 @@ includes `ja_ginza` NER, so the first `uv sync` downloads a model.
 - **Numbers, not values.** Indicators, logs and error messages must never contain
   real values, tokens or entity paths
 - **No new runtime dependencies** without a clear reason. The dependency list is
-  deliberately short (fastapi, uvicorn, httpx, pynacl, spacy, ja_ginza)
+  deliberately short (axum, tokio, reqwest+rustls, argon2, xsalsa20poly1305,
+  regex, serde, clap): every one of them has to be auditable, and the binary has
+  to stay self-contained on all three platforms
 
 ## Style
 
-- Python 3.12, `from __future__ import annotations`, type hints on public
-  functions
+- Rust 2021, `cargo fmt` clean, `clippy -D warnings` clean
 - Comments explain *why*, not *what*; the codebase is written to be read by
   someone auditing it
+- Platform neutrality: no `#[cfg(unix)]`-only shortcuts, no shelling out, no
+  filesystem paths that assume `/` — CI builds and tests Windows, macOS and Linux
 - Japanese and English are both fine in comments and docs. User-facing CLI output
   is Japanese today; keep it consistent within a surface
 
 ## Commits and pull requests
 
 - One logical change per commit; the subject line says what changed and why
-- Run `uv run pytest` before pushing — CI runs the same suite on Python 3.12
+- Run `cargo test` and `cargo clippy --all-targets -- -D warnings` before
+  pushing — CI runs the same on Linux, macOS and Windows
 - In the pull request, state the threat-model impact: does this widen what can
   leave the machine? If yes, say so explicitly
 

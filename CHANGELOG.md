@@ -1,16 +1,37 @@
 # Changelog
 
-Notable changes to `mask`. The project is pre-1.0: the guarantee is stable, the
-surface is not.
+Notable changes to `mask`. The guarantee is stable; the surface is versioned.
 
-## 0.1.0 — unreleased
+## 1.0.0 — unreleased
 
-First public release. Everything below is new.
+First public release. The Rust rewrite ships as a single native binary for
+Windows, macOS and Linux.
+
+### Native rewrite
+
+- The Python runtime is gone: `mask` is one self-contained executable
+  (Windows x86_64, macOS x86_64/aarch64, Linux x86_64/aarch64), built with
+  `cargo build --release` and published per release tag
+- No interpreter, no virtualenv, no OpenSSL, no cmake. TLS is rustls with
+  bundled native roots; crypto is pure Rust (argon2, xsalsa20poly1305)
+- NER without a model download: an offline surname lexicon plus a
+  given-name extension that stops at honorifics, replacing the spaCy/ja_ginza
+  dependency. Names that matter in an operation belong in `dictionary.tsv`,
+  which still outranks the built-in detector on span ties
+- Envelope crypto stays wire-compatible with the previous implementation
+  (argon2id + XSalsa20-Poly1305, `nonce‖tag‖ciphertext`), so existing handoff
+  tooling keeps working
+- New: `gateway.handoff_kdf_opslimit` / `handoff_kdf_memlimit` (and the matching
+  `MASK_HANDOFF_KDF_*` environment variables) tune the KDF cost for hosts that
+  cannot afford 256 MiB per attempt; unsealing always uses the cost recorded in
+  the envelope
+- CI is a Linux/macOS/Windows matrix running `cargo fmt --check`,
+  `cargo clippy -D warnings` and `cargo test`
 
 ### Pseudonymization core
 
 - Detection pipeline: regex rules (phone, email, account, address), a TSV
-  dictionary, and `ja_ginza` NER for Japanese named entities
+  dictionary, and built-in offline name detection
 - NFKC normalization so full-width and half-width variants fold onto the same
   entity
 - Replacement with opaque, type-tagged tokens (`⟦人名7⟧`) and restoration of the
@@ -55,8 +76,10 @@ First public release. Everything below is new.
 
 ### Tests
 
-- 118 tests, including a canary suite asserting that no known PII appears in any
-  byte a mock upstream received
+- 135 tests across eight integration binaries, including a canary suite
+  asserting that no known PII appears in any byte a mock upstream received
+- The CLI is tested against a live gateway too: `mask status`, `mask status
+  --json`, `mask chat` round trip, and the `--no-color` contract
 
 ### Website
 
@@ -68,5 +91,7 @@ First public release. Everything below is new.
 
 - `stream: true` buffers the upstream response before restoring it (accurate,
   not incremental)
+- Built-in name detection is lexicon-based: unfamiliar names and rare
+  orthographies need a `dictionary.tsv` entry
 - Unsupported Anthropic content blocks (images, thinking) are dropped
 - Allowlisted paths are forwarded unmasked (the leak gate still applies)

@@ -1424,7 +1424,7 @@
               <a class="link" href="#mechanism">信頼性インジケータ <span aria-hidden="true">→</span></a>
             </div>
             <div class="hero-meta">
-              <span>Python 3.12+</span>
+              <span>Rust · 単一バイナリ</span>
               <span class="sep" aria-hidden="true"></span>
               <span>MIT License</span>
               <span class="sep" aria-hidden="true"></span>
@@ -1511,7 +1511,7 @@
             <span class="caption">02 — 使い方</span>
             <h2>まず、これだけ。</h2>
           </div>
-          <p class="section-sub">Python 3.12+ と uv だけ。上流の API キーはゲートウェイの中に留まります。<br>あとは既存ツールの base URL を差し替えるだけです。</p>
+          <p class="section-sub">Rust ツールチェーンだけ、あるいはリリースのバイナリを置くだけ。上流の API キーはゲートウェイの中に留まります。<br>あとは既存ツールの base URL を差し替えるだけです。</p>
         </div>
 
         <div class="quick-grid">
@@ -1519,7 +1519,7 @@
             <div class="step">
               <span class="step-num">1</span>
               <div>
-                <h3>クローンと依存関係</h3>
+                <h3>ビルド（またはバイナリを取得）</h3>
                 <div class="code">
                   <div class="code-head">
                     <span class="code-lang">shell</span>
@@ -1530,7 +1530,7 @@
                       コピー</button>
                   </div>
                   <pre><code>git clone https://github.com/yf-1229/mask.git &amp;&amp; cd mask
-uv sync</code></pre>
+cargo build --release</code></pre>
                 </div>
               </div>
             </div>
@@ -1567,7 +1567,7 @@ uv sync</code></pre>
                       </svg>
                       コピー</button>
                   </div>
-                  <pre><code>uv run mask serve</code></pre>
+                  <pre><code>./target/release/mask serve</code></pre>
                 </div>
               </div>
             </div>
@@ -1617,7 +1617,7 @@ uv sync</code></pre>
                       </svg>
                       コピー</button>
                   </div>
-                  <pre><code>uv run pytest</code></pre>
+                  <pre><code>cargo test</code></pre>
                 </div>
                 <p class="config-value note">カナリアテスト込み。上流に実値が出ないことがここで証明されます。</p>
               </div>
@@ -1985,7 +1985,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
             <div class="terminal">
               <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">leak gate</span><span class="term-val">block <span class="term-note">(fail-closed)</span></span></div>
               <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">session</span><span class="term-val">global <span class="term-note">(2 records)</span></span></div>
-              <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">ner</span><span class="term-val">ja_ginza detection on</span></div>
+              <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">ner</span><span class="term-val">built-in name detection on</span></div>
               <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">dictionary</span><span class="term-val">0 terms</span></div>
               <div class="term-row"><span class="dot" data-on="true"></span><span class="term-key">gateway token</span><span class="term-val">required</span></div>
               <div class="term-row"><span></span><span class="term-key">requests</span><span class="term-val">2</span></div>
@@ -2162,7 +2162,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
       <a href="#overview" data-search="概要 とは overview intro mask gateway ローカル なに 目的">
         <span class="p-num">00</span><span class="p-title">概要</span><span class="p-hint">mask とは</span>
       </a>
-      <a href="#usage" data-search="使い方 導入 インストール 設定 quickstart install setup uv base url エージェント シェル cli">
+      <a href="#usage" data-search="使い方 導入 インストール 設定 quickstart install setup cargo build release binary base url エージェント シェル cli">
         <span class="p-num">01</span><span class="p-title">使い方</span><span class="p-hint">導入・設定・入口</span>
       </a>
       <a href="#examples" data-search="例 具体例 実例 往復 マスク 復元 入出力 chat ヘッダ x-mask example">
@@ -2404,7 +2404,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
       setText("w-scope", String(p.session_scope || "?"));
       setText("w-table", String(p.mapping_records || 0));
       lamp("w-lamp-ner", !!p.ner);
-      setText("w-ner", p.ner ? "on (ja_ginza)" : "off");
+      setText("w-ner", p.ner ? "on (built-in)" : "off");
       setText("w-dict", String(p.dictionary_terms || 0));
       setText("w-token", p.gateway_token ? "required" : "not set (localhost のみ)");
       setText("w-req", String(c.requests_total || 0));

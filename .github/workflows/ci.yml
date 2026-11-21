@@ -1,5 +1,9 @@
 name: CI
 
+# Native on all three platforms: the point of the Rust rewrite is a single
+# self-contained binary per OS, so every push builds, lints and tests on each
+# one rather than on Linux only.
+
 on:
   push:
     branches: [main]
@@ -12,21 +16,47 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  test:
-    name: pytest (Python 3.12)
+  fmt:
+    name: cargo fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          enable-cache: true
+          components: rustfmt
+      - run: cargo fmt --all --check
 
-      - name: Install dependencies
-        run: uv sync --locked
+  test:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Run tests
-        # Includes the canary suite: no known PII may reach the mock upstream.
-        run: uv run pytest -q
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # Includes the canary suite: no known PII may reach the mock upstream,
+        # and the leak gate / handoff envelopes are exercised end to end.
+        run: cargo test
+
+      - name: Smoke test the binary
+        run: |
+          cargo run --quiet -- --version
+          cargo run --quiet -- --no-color check "山田太郎さんと090-1234-5678の件"

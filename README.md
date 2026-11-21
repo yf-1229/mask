@@ -2,20 +2,23 @@
 
 [![CI](https://github.com/yf-1229/mask/actions/workflows/ci.yml/badge.svg)](https://github.com/yf-1229/mask/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-35d0ba.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-35d0ba.svg)](pyproject.toml)
+[![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-35d0ba.svg)](Cargo.toml)
+[![Windows · macOS · Linux](https://img.shields.io/badge/native-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-35d0ba.svg)](#install)
 
 **Real names never reach the model — and mask guarantees the way back.**
 
-`mask` is a local gateway that sits in front of an LLM API. You type names,
-phone numbers and addresses as usual; what leaves the machine is an opaque
-pseudonym such as `⟦人名7⟧`. The response is restored to the real values before
-you see it.
+`mask` is a single native binary that sits in front of an LLM API. You type
+names, phone numbers and addresses as usual; what leaves the machine is an
+opaque pseudonym such as `⟦人名7⟧`. The response is restored to the real values
+before you see it.
 
 ```
 LLM client ──(real PII)──> mask gateway ──(pseudonyms only)──> LLM API
 LLM client <──(restored)── mask gateway <──(pseudonyms)─────── LLM API
 ```
 
+- **One self-contained executable** for Windows, macOS (Intel/Apple silicon) and
+  Linux (x86_64/aarch64) — no Python, no interpreter, no OpenSSL, no cmake
 - Speaks **both** OpenAI (`/v1/chat/completions`) and **Anthropic**
   (`/v1/messages`) protocols, so agent harnesses such as Claude Code connect by
   changing a base URL only
@@ -49,17 +52,17 @@ The Anthropic Messages protocol is accepted in a model-agnostic way:
   arguments are **restored** because they execute locally; tool results are
   masked on the next turn like any other input
 - `stream: true` buffers the upstream response, restores it, and emits a correct
-  Anthropic SSE event sequence (same as Phase A: accurate, not incremental)
+  Anthropic SSE event sequence (accurate, not incremental)
 - Authentication accepts both `Authorization: Bearer` and `x-api-key`
 
 ### Shell entrance (`mask` command)
 
 ```sh
-uv run mask chat "call 山田太郎 for me"   # one round trip; the answer is restored
-uv run mask check "090-1234-5678"        # dry run: what would be masked (no network)
-uv run mask status                       # reliability indicator panel
-uv run mask status --json                # raw /status snapshot
-uv run mask serve                        # start the gateway (same as mask-server)
+mask chat "call 山田太郎 for me"   # one round trip; the answer is restored
+mask check "090-1234-5678"        # dry run: what would be masked (no network)
+mask status                       # reliability indicator panel
+mask status --json                # raw /status snapshot
+mask serve                        # start the gateway
 ```
 
 - `check` is a detection dry run: masked text on stdout, indicators (counts and
@@ -67,6 +70,26 @@ uv run mask serve                        # start the gateway (same as mask-serve
 - `chat` talks to a running gateway and prints the response body to stdout, with
   a reliability footer derived from the `X-Mask-*` headers
 - No API-key spoofing to worry about: the CLI only uses `gateway.token` as a Bearer
+
+## How detection works (no model download)
+
+The rewrite replaces the Python stack's spaCy/ja_ginza pipeline with a built-in,
+dependency-free detector that ships inside the binary:
+
+1. **Rules** — emails, phone numbers (hyphenated, parenthesised, full-width),
+   postal addresses, bank accounts and card numbers, with explicit boundary
+   guards so dates (`2019-04-01`) never register as phone numbers.
+2. **User dictionary** — `dictionary.tsv` (`term<TAB>type`), longest match first,
+   for the names that matter in your operation.
+3. **Built-in name detection** — an offline surname lexicon (300 entries) plus a
+   given-name extension that stops at honorifics and function words. It needs no
+   model file and starts instantly.
+
+Trade-off, stated plainly: a statistical NER model has wider recall on
+unfamiliar names than a lexicon. The canary corpus (`tests/pipeline.rs`,
+`tests/gateway.rs`) pins the recall the tool claims, and anything it misses
+belongs in `dictionary.tsv` — that is the highest-trust layer and beats the
+built-in detector on span ties.
 
 ## Reliability indicators
 
@@ -101,7 +124,7 @@ surfaces, always as **numbers only** — never values, tokens or entity paths.
    ```
    ● leak gate        block  (fail-closed)
    ● session          global  (mapping table: 2 records)
-   ● ner              ja_ginza detection on
+   ● ner              built-in name detection on
    ● dictionary       0 terms
    ● gateway token    required (both entrances)
      requests         2 / entities masked 2 / tokens restored 2 / unresolved 0
@@ -126,8 +149,9 @@ surfaces, always as **numbers only** — never values, tokens or entity paths.
    re-appearing value all converge on the same failure: not sent.
 4. **Gateway token** — set `gateway.token` and clients must present it as their
    API key. Protection when listening on a LAN; comparison is constant-time.
-5. **Canary tests** — an integration test (`test_gateway_guard.py`) asserts that
-   every byte a mock upstream received contains no known PII. Regressions stop in CI.
+5. **Canary tests** — integration tests (`tests/gateway.rs`,
+   `tests/agent_entry.rs`) assert that every byte a mock upstream received
+   contains no known PII. Regressions stop in CI, on all three platforms.
 
 What is guaranteed: a value the session has detected does not leave through any
 field, path or header. What is not: a value that was never detected (unknown
@@ -174,6 +198,9 @@ curl -s -X POST http://127.0.0.1:8080/admin/import \
 - Imported values also become leak-gate targets: sending them out is still refused
 - Admin endpoints return 403 when `gateway.token` is unset (fail-closed). Token
   comparison is constant-time
+- KDF cost is tunable (`gateway.handoff_kdf_opslimit` / `handoff_kdf_memlimit`)
+  for hosts that cannot afford 256 MiB per attempt; unsealing always uses the
+  cost recorded inside the envelope, so a table sealed elsewhere still opens here
 
 Policy: handoff is a convenience feature — if it breaks, redo it. If an envelope
 expires, locks or is consumed, re-mask → LLM → restore from scratch, or re-issue
@@ -186,15 +213,20 @@ passphrase strength and short TTLs are what bound that.
 
 ## Install
 
+Prebuilt binaries are attached to every release (Linux x86_64/aarch64, macOS
+x86_64/aarch64, Windows x86_64). Or build it yourself — one command, one file:
+
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
-uv sync
+cargo build --release          # target/release/mask(.exe)
 cp mask.toml.example mask.toml
 # edit mask.toml: upstream.base_url / upstream.api_key
-uv run mask serve                 # (mask-server does the same)
+./target/release/mask serve
 ```
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires the [Rust toolchain](https://rustup.rs) (1.82+). Nothing else: TLS is
+rustls with bundled roots, crypto is pure Rust, and the release profile is
+stripped and LTO'd (~7 MB).
 
 ### Client configuration (once)
 
@@ -216,7 +248,7 @@ base_url = "https://api.openai.com/v1"
 api_key = "sk-..."          # or the MASK_UPSTREAM_API_KEY environment variable
 
 [mask]
-use_ner = true              # named-entity extraction via ja_ginza
+use_ner = true              # built-in offline name detection (no model download)
 dictionary = "dictionary.tsv" # extra dictionary (TSV: term<TAB>type)
 
 [session]
@@ -230,6 +262,8 @@ passthrough_allowlist = ["/v1/models"]  # extra paths to forward. Everything els
 leak_gate = "block"          # "block": refuse to send when a real value remains / "warn": log only
 handoff_ttl_seconds = 3600   # envelope TTL (seconds); undecryptable afterwards
 handoff_max_attempts = 3     # wrong passphrases before an envelope locks permanently
+handoff_kdf_opslimit = 3     # argon2id passes (raise, never lower, on a capable host)
+handoff_kdf_memlimit = 268435456  # argon2id memory in bytes (256 MiB)
 admin_allow_remote = false   # export/import from localhost only (true lifts this)
 status_public = false        # publish the /status snapshot (for the website widget)
                              # false means /status requires gateway.token like any entrance
@@ -237,18 +271,21 @@ status_public = false        # publish the /status snapshot (for the website wid
 
 Environment variables override the file: `MASK_SERVER_HOST`, `MASK_SERVER_PORT`,
 `MASK_UPSTREAM_BASE_URL`, `MASK_UPSTREAM_API_KEY`, `MASK_GATEWAY_TOKEN`,
-`MASK_LEAK_GATE`, `MASK_STATUS_PUBLIC`.
+`MASK_LEAK_GATE`, `MASK_HANDOFF_TTL_SECONDS`, `MASK_HANDOFF_MAX_ATTEMPTS`,
+`MASK_HANDOFF_KDF_OPSLIMIT`, `MASK_HANDOFF_KDF_MEMLIMIT`,
+`MASK_ADMIN_ALLOW_REMOTE`, `MASK_STATUS_PUBLIC`.
 
 Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` / `account`
 
-## Current limitations (Phase A)
+## Current limitations
 
 - `stream: true` works, but the upstream stream is fully buffered before the
   restored response is returned (one chunk for OpenAI-compatible, a correct event
-  sequence for Anthropic-compatible). Accurate, not incremental. Incremental
-  restoration is Phase B
+  sequence for Anthropic-compatible). Accurate, not incremental
 - The Anthropic-compatible entrance translates text and tool blocks. Unsupported
   blocks (images, thinking, …) are dropped — deny by default
+- Built-in name detection is lexicon-based, not statistical: unfamiliar names and
+  rare orthographies need an entry in `dictionary.tsv`
 - Paths added to the allowlist pass through unmasked (the leak gate still
   applies). Be careful adding schemas that can carry PII (embeddings, …)
 - Cloud services whose base URL cannot be changed (ChatGPT web, …) are out of scope
@@ -256,11 +293,17 @@ Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` 
 ## Tests
 
 ```sh
-uv run pytest
+cargo test          # 135 tests
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-118 tests, including the canary suite that proves no real value reaches the
-upstream.
+The suite covers the detection rules, dictionary and restore layers, the native
+name detector, the OpenAI and Anthropic entrances (against a real loopback mock
+upstream), the leak gate, deny-by-default routing, the indicator surfaces, the
+encrypted handoff (crypto, expiry, lockout, single use, admin flow), the TOML/env
+configuration, and the CLI — including the **canary suite** that proves no known
+real value reaches the upstream. CI runs it on Linux, macOS and Windows.
 
 ## Website
 
@@ -271,7 +314,8 @@ depth, envelope handoff, and a **live indicator** that reads
 `gateway.status_public = true` (fail-closed).
 
 ```sh
-python3 -m http.server 8877 -d site    # e.g. http://127.0.0.1:8877
+cargo run -- serve &                    # the gateway whose numbers the page shows
+python3 -m http.server 8877 -d site     # any static file server; http://127.0.0.1:8877
 ```
 
 Published at **https://branchead.com/mask/** as an assets-only Cloudflare Worker
