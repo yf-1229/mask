@@ -1,10 +1,11 @@
 {
-  // Static site for the mask project, served at https://branchead.com/mask/
+  // Static site for the mask project, served at https://mask.branchead.com/
   //
   // The site is a single self-contained HTML file (plus an OGP image and a 404
-  // page). It is deployed as an assets-only Worker on a path route, so the
-  // apex site (branchead.com, a different Worker) is untouched: the more
-  // specific route pattern wins.
+  // page). It is deployed as an assets-only Worker on its own subdomain, so the
+  // apex site (branchead.com, a different Worker) is untouched: a custom domain
+  // claims only mask.branchead.com, and Cloudflare provisions its DNS record and
+  // certificate on the first deploy.
   //
   //   npx wrangler deploy
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
@@ -12,14 +13,13 @@
   "compatibility_date": "2026-11-20",
   "assets": {
     "directory": "./site",
-    "base_path": "/mask",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page"
   },
   "routes": [
     {
-      "pattern": "branchead.com/mask*",
-      "zone_name": "branchead.com"
+      "pattern": "mask.branchead.com",
+      "custom_domain": true
     }
   ]
 }

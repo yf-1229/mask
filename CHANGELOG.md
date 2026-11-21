@@ -84,8 +84,10 @@ Windows, macOS and Linux.
 ### Website
 
 - `site/index.html`: static, single file, no external requests
-- Published at <https://branchead.com/mask/> as an assets-only Cloudflare Worker
-  on a path route (`wrangler.jsonc`)
+- Published at <https://mask.branchead.com/> as an assets-only Cloudflare Worker
+  on its own subdomain (`wrangler.jsonc`); the site moved off the
+  `branchead.com/mask/` path route, so internal links, canonical and OGP URLs are
+  root-relative or on the new host
 
 ### Known limitations
 

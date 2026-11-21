@@ -8,7 +8,7 @@ readme = "README.md"
 license = "MIT"
 authors = ["Yuta Fujiwara"]
 repository = "https://github.com/yf-1229/mask"
-homepage = "https://branchead.com/mask/"
+homepage = "https://mask.branchead.com/"
 keywords = ["pii", "privacy", "llm", "gateway", "pseudonymization"]
 categories = ["command-line-utilities", "web-programming::http-server"]
 

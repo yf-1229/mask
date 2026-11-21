@@ -61,8 +61,8 @@ Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 `site/index.html` is a single self-contained file with no external requests —
 please keep it that way (no CDN fonts, no analytics, no third-party scripts).
-It is deployed to <https://branchead.com/mask/> as an assets-only Cloudflare
-Worker on a path route; see `wrangler.jsonc`.
+It is deployed to <https://mask.branchead.com/> as an assets-only Cloudflare
+Worker on its own subdomain; see `wrangler.jsonc`.
 
 ```sh
 python3 -m http.server 8877 -d site    # preview locally

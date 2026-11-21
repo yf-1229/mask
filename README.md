@@ -28,7 +28,7 @@ LLM client <──(restored)── mask gateway <──(pseudonyms)────�
 - **Reliability indicators**: per-request `X-Mask-*` headers, a `/status`
   snapshot, and a `mask status` panel — numbers only, never values
 
-Website: **https://branchead.com/mask/** (static, single file, zero external requests)
+Website: **https://mask.branchead.com/** (static, single file, zero external requests)
 
 ## Three entrances, one guarantee
 
@@ -318,8 +318,8 @@ cargo run -- serve &                    # the gateway whose numbers the page sho
 python3 -m http.server 8877 -d site     # any static file server; http://127.0.0.1:8877
 ```
 
-Published at **https://branchead.com/mask/** as an assets-only Cloudflare Worker
-on a path route (`wrangler.jsonc`):
+Published at **https://mask.branchead.com/** as an assets-only Cloudflare Worker
+on its own subdomain (`wrangler.jsonc`):
 
 ```sh
 npx wrangler deploy

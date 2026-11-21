@@ -1,8 +1,8 @@
 name: Deploy site
 
-# Publishes site/ to https://branchead.com/mask/ as an assets-only Worker on a
-# path route. The apex site (branchead.com) belongs to a different Worker and is
-# untouched: the more specific route pattern wins.
+# Publishes site/ to https://mask.branchead.com/ as an assets-only Worker on its
+# own custom domain. The apex site (branchead.com) belongs to a different Worker
+# and is untouched: the subdomain is a separate hostname.
 #
 # Required repository secrets:
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Workers Routes:Edit, Zone:Read
@@ -57,6 +57,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # assets.base_path needs Wrangler 4.148.0 or later.
+          # Pinned so a Wrangler release cannot change what gets published.
           wranglerVersion: "4.165.0"
           command: deploy

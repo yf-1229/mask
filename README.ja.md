@@ -26,7 +26,7 @@ LLMクライアント <──(実名に復元)── mask gateway <──(疑似
 - **信頼性インジケータ**: リクエスト毎の `X-Mask-*` ヘッダ、`/status` スナップショット、
   `mask status` パネル — 「守れている」ことを見える化 (数値のみ、実値なし)
 
-English README: [README.md](README.md) ／ 公式サイト: **https://branchead.com/mask/**
+English README: [README.md](README.md) ／ 公式サイト: **https://mask.branchead.com/**
 
 ## 三つの入口、一つの保証
 
@@ -309,7 +309,7 @@ cargo run -- serve &                    # 数字の出どころになるゲー�
 python3 -m http.server 8877 -d site     # 任意の静的ファイルサーバ: http://127.0.0.1:8877
 ```
 
-公開先は **https://branchead.com/mask/** — パスルート上の assets-only
+公開先は **https://mask.branchead.com/** — 専用サブドメイン上の assets-only
 Cloudflare Worker (`wrangler.jsonc`):
 
 ```sh
