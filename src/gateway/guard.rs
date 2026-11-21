@@ -93,6 +93,7 @@ pub const AGENT_PROCESS_NAMES: &[&str] = &[
 
 /// How far up the process tree to look. An agent's shell is a child of the
 /// agent; two or three generations cover a wrapper such as `sh -c` or `cargo`.
+#[cfg(target_os = "linux")] // the walk itself is /proc-based; elsewhere it is dead code
 const ANCESTRY_DEPTH: usize = 12;
 
 /// What says an AI agent owns the current shell, if anything.

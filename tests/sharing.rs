@@ -104,7 +104,10 @@ fn rewound_clear_expiry_fast_fails() {
 #[test]
 fn expired_envelope_is_refused() {
     let envelope = test_envelope(&sample_payload(), PASS, 1);
-    std::thread::sleep(std::time::Duration::from_millis(1200));
+    // `exp` is whole seconds and `unseal` refuses only once it has *passed*,
+    // so one second plus a margin can land on `now == exp`. Two seconds
+    // guarantees `now > exp` on any clock granularity.
+    std::thread::sleep(std::time::Duration::from_millis(2200));
     assert!(matches!(unseal(&envelope, PASS), Err(UnsealError::Expired)));
 }
 
@@ -562,7 +565,10 @@ async fn successful_import_consumes_the_envelope() {
 async fn expired_envelope_is_gone() {
     let h = start_with(admin_config(&[]), MockKind::Echo).await;
     let envelope = test_envelope(&json!({"v": 1, "records": []}), "p", 1);
-    std::thread::sleep(std::time::Duration::from_millis(1200));
+    // `exp` is whole seconds and `unseal` refuses only once it has *passed*,
+    // so one second plus a margin can land on `now == exp`. Two seconds
+    // guarantees `now > exp` on any clock granularity.
+    std::thread::sleep(std::time::Duration::from_millis(2200));
     let response = h
         .post_json_auth(
             "/admin/import",
