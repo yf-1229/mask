@@ -116,8 +116,8 @@ surfaces, always as **numbers only** — never values, tokens or entity paths.
    process counters (requests, masked/restored, leak blocks, path denials, auth
    denials, envelope stats, uptime). With `gateway.token` set it requires the
    token like any other entrance. Setting `gateway.status_public = true`
-   explicitly turns it into a public snapshot (this is what the website widget
-   reads). Fail-closed default: `false`.
+   explicitly turns it into a public snapshot for dashboards and scripts.
+   Fail-closed default: `false`.
 
 3. **CLI panel (`mask status`)** — reads `/status` and renders lamps:
 
@@ -265,7 +265,7 @@ handoff_max_attempts = 3     # wrong passphrases before an envelope locks perman
 handoff_kdf_opslimit = 3     # argon2id passes (raise, never lower, on a capable host)
 handoff_kdf_memlimit = 268435456  # argon2id memory in bytes (256 MiB)
 admin_allow_remote = false   # export/import from localhost only (true lifts this)
-status_public = false        # publish the /status snapshot (for the website widget)
+status_public = false        # publish the /status snapshot (numbers only)
                              # false means /status requires gateway.token like any entrance
 ```
 
@@ -307,15 +307,22 @@ real value reaches the upstream. CI runs it on Linux, macOS and Windows.
 
 ## Website
 
-`site/index.html` — static, single file, no external CDN requests (the tool's own
-philosophy, practised). Architecture diagram, the three entrances, defense in
-depth, envelope handoff, and a **live indicator** that reads
-`http://127.0.0.1:8080/status` directly. Reading requires
-`gateway.status_public = true` (fail-closed).
+`site/index.html` — one static, self-contained page: what mask does, the three
+setup steps, and an honest list of what it cannot do. No JavaScript, no CDN, no
+external font; `site/_headers` enforces that with `default-src 'none'`.
+
+The OGP card (`site/og.png`) is generated from `docs/og-card.html`:
 
 ```sh
-cargo run -- serve &                    # the gateway whose numbers the page shows
-python3 -m http.server 8877 -d site     # any static file server; http://127.0.0.1:8877
+google-chrome --headless=new --hide-scrollbars --window-size=1200,630 \
+  --force-device-scale-factor=1 --screenshot=site/og.png \
+  "file://$PWD/docs/og-card.html"
+```
+
+Preview it with any static file server:
+
+```sh
+python3 -m http.server 8877 -d site     # http://127.0.0.1:8877
 ```
 
 Published at **https://mask.branchead.com/** as an assets-only Cloudflare Worker
@@ -324,10 +331,6 @@ on its own subdomain (`wrangler.jsonc`):
 ```sh
 npx wrangler deploy
 ```
-
-A page served over https cannot read `http://127.0.0.1` (mixed content), so the
-live widget says so instead of pretending to poll. Open `site/index.html`
-locally, or run `mask status`, to see live numbers.
 
 `site/_headers` ships a strict CSP (`default-src 'none'`) that blocks every
 external request — including the RUM beacon Cloudflare's edge injects into HTML

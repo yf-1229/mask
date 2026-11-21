@@ -1,0 +1,81 @@
+<!--
+  Source for site/og.png (1200x630, the link-preview card).
+
+  Regenerate after editing this file:
+
+    google-chrome --headless=new --hide-scrollbars --window-size=1200,630 \
+      --force-device-scale-factor=1 --screenshot=site/og.png \
+      "file://$PWD/docs/og-card.html"
+
+  Not deployed: wrangler serves ./site only.
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root {
+    --bg: #f5f5f5; --paper: #fff; --ink: #0a0a0a; --soft: #2a2a2a;
+    --mid: #737373; --line: #e0e0e0; --ember: #e7000b;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", "Hiragino Sans",
+      "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 630px; width: 1200px; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans);
+    padding: 64px 72px;
+    display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 26px; font-weight: 600; }
+  .url { font-family: var(--mono); font-size: 17px; color: var(--mid); }
+  h1 { margin: 12px 0 0; font-size: 74px; line-height: 1.18; letter-spacing: 0.005em; }
+  .eyebrow { margin: 64px 0 0; font-size: 20px; color: var(--mid); letter-spacing: 0.04em; }
+  .sub { margin: 22px 0 0; font-size: 25px; line-height: 1.6; color: var(--soft); }
+  .card {
+    margin-top: 34px; background: var(--paper); border: 1px solid var(--line);
+    border-radius: 16px; padding: 18px 24px; width: 720px;
+  }
+  .row { display: grid; grid-template-columns: 108px 1fr; gap: 14px; align-items: baseline; }
+  .row + .row { margin-top: 8px; }
+  .k { font-family: var(--mono); font-size: 15px; color: var(--mid); }
+  .v { font-size: 21px; }
+  .tok { font-family: var(--mono); font-size: 19px; background: #f0f0f0; border-radius: 5px; padding: 1px 6px; }
+  .foot {
+    margin-top: auto; display: flex; justify-content: space-between;
+    font-size: 17px; color: var(--mid); border-top: 1px solid var(--line); padding-top: 18px;
+  }
+</style>
+</head>
+<body>
+  <div class="top">
+    <span class="brand">
+      <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="9" fill="#0a0a0a"/>
+        <rect x="9" y="14" width="14" height="4" rx="2" fill="#fafafa"/>
+        <circle cx="24" cy="8" r="2" fill="#e7000b"/>
+      </svg>
+      mask
+    </span>
+    <span class="url">mask.branchead.com</span>
+  </div>
+
+  <p class="eyebrow">ローカルで動く中継サーバー</p>
+  <h1>実名は、LLM に渡らない。</h1>
+  <p class="sub">送る前に記号へ置き換え、返ってきた答えは手元で元へ戻す。</p>
+
+  <div class="card">
+    <div class="row"><span class="k">送る前</span><span class="v">佐藤美咲さんに 090-4821-7736 まで連絡して</span></div>
+    <div class="row"><span class="k">外に出る</span><span class="v"><span class="tok">⟦人名1⟧</span>さんに <span class="tok">⟦電話2⟧</span> まで連絡して</span></div>
+  </div>
+
+  <div class="foot">
+    <span>Rust · 単一バイナリ · MIT License</span>
+    <span>OpenAI / Anthropic 互換</span>
+  </div>
+</body>
+</html>

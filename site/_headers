@@ -3,13 +3,13 @@
 # The Worker serves the assets at the root of its own hostname
 # (https://mask.branchead.com/), so the pattern is /*.
 #
-# The CSP is deliberately strict: this page is a single file with inline style
-# and script, an embedded subset of Geist (data: only), no images beyond its own
-# OGP card, and its only network call is to a local gateway. "No external
-# requests" is enforced, not just promised.
+# The CSP is deliberately strict: each page is a single file with inline style,
+# system fonts, no images beyond its own OGP card and no JavaScript at all. There
+# is no network endpoint in the policy, so "no external requests" is enforced
+# rather than promised.
 
 /*
-  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; img-src 'self' data:; connect-src http://127.0.0.1:8080; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin

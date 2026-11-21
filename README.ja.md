@@ -93,8 +93,8 @@ mask serve                            # ゲートウェイ起動
    マッピングテーブル件数、トークン設定、upstream) とプロセス累積カウンタ
    (リクエスト数、マスク/復元数、リーク遮断数、パス拒否数、認証拒否数、
    封筒統計、uptime)。`gateway.token` 設定時は他の入口と同じくトークンが必要。
-   `gateway.status_public = true` を明示すると公開スナップショットになります
-   (ウェブサイトのウィジェットが読み取るのはこれ)。fail-closed 既定: false。
+   `gateway.status_public = true` を明示すると公開スナップショット (数字のみ)
+   になります。fail-closed 既定: false。
 
 3. **CLI パネル (`mask status`)** — `/status` を引いてランプ付きで表示:
 
@@ -256,7 +256,7 @@ handoff_max_attempts = 3     # パスフレーズ誤り回数。超えたらそ�
 handoff_kdf_opslimit = 3     # argon2id の反復回数 (余力のあるホストでは上げる方向で)
 handoff_kdf_memlimit = 268435456  # argon2id のメモリ (バイト、256MiB)
 admin_allow_remote = false   # export/import は localhost からのみ (true で解除)
-status_public = false        # /status インジケータの公開 (ウェブサイトのウィジェット用)
+status_public = false        # /status インジケータの公開 (数字のみ)
                              # false なら /status は他の入口と同じく gateway.token 必須
 ```
 
@@ -297,16 +297,22 @@ TOML/環境変数設定、CLI を網羅。上流に実値が出ないことを�
 
 ## 公式ウェブサイト
 
-`site/index.html` — 静的・単一ファイル・外部 CDN リクエストなし
-(このツールの思想の実践)。アーキテクチャ図、三つの入口の設定表、
-多層防御、封筒ハンドオフ、そして**ライブ・インジケータ**:
-`http://127.0.0.1:8080/status` を直接読みに行き、ゲートウェイの姿勢と
-カウンタをランプ付きで表示します。読み取りには
-`gateway.status_public = true` の明示が必要 (fail-closed)。
+`site/index.html` — 静的・単一ファイルの1ページ。mask が何をするのか、
+3つの設定手順、そして「できないこと」まで書いてあります。JavaScript なし、
+CDN なし、外部フォントなし (`site/_headers` の `default-src 'none'` で強制)。
+
+OGP カード (`site/og.png`) は `docs/og-card.html` から生成します:
 
 ```sh
-cargo run -- serve &                    # 数字の出どころになるゲートウェイ
-python3 -m http.server 8877 -d site     # 任意の静的ファイルサーバ: http://127.0.0.1:8877
+google-chrome --headless=new --hide-scrollbars --window-size=1200,630 \
+  --force-device-scale-factor=1 --screenshot=site/og.png \
+  "file://$PWD/docs/og-card.html"
+```
+
+確認は任意の静的ファイルサーバで:
+
+```sh
+python3 -m http.server 8877 -d site     # http://127.0.0.1:8877
 ```
 
 公開先は **https://mask.branchead.com/** — 専用サブドメイン上の assets-only
@@ -315,10 +321,6 @@ Cloudflare Worker (`wrangler.jsonc`):
 ```sh
 npx wrangler deploy
 ```
-
-https で配信されるページからは `http://127.0.0.1` を読めません (mixed content)。
-そのため公開ページのウィジェットは「読めない」と明示します。数字を見たいときは
-`site/index.html` をローカルで開くか、`mask status` を実行してください。
 
 `site/_headers` が厳格な CSP (`default-src 'none'`) を配信し、外部リクエストを
 すべて遮断します。Cloudflare のエッジが HTML に差し込む RUM ビーコンも遮断対象です

@@ -31,5 +31,5 @@ handoff_max_attempts = 3        # パスフレーズ誤り回数。超えたら�
 handoff_kdf_opslimit = 3         # argon2id の反復回数 (既定: MODERATE)
 handoff_kdf_memlimit = 268435456 # argon2id のメモリ (バイト、256MiB)。下げると総当たりが安くなる
 admin_allow_remote = false       # export/import は localhost からのみ(true で解除)
-status_public = false            # /status インジケータの公開(ウェブサイトのウィジェット用)。
+status_public = false            # /status インジケータの公開(数字のみ)。
                                  # false なら /status は他の入口と同じく gateway.token 必須

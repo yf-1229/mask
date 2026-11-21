@@ -74,6 +74,18 @@ Windows, macOS and Linux.
 - `mask check` (detection dry run, no network), `mask chat` (one round trip
   through a running gateway), `mask status`, `mask serve`
 
+### Website
+
+- The landing page is one short page now: what mask does, the three setup steps,
+  what is guaranteed, and what is not. No JavaScript, no CDN, no embedded
+  webfont; the CSP no longer allows scripts at all (`default-src 'none'`, no
+  `script-src`)
+- The live `/status` widget is gone from the published page. A page served over
+  https cannot read `http://127.0.0.1` anyway, and the numbers are one command
+  away in `mask status` (the `X-Mask-*` headers stay as they were)
+- The OGP card is regenerated from `docs/og-card.html`; the previous one still
+  advertised "Python 3.12+" and `branchead.com/mask`
+
 ### Tests
 
 - 135 tests across eight integration binaries, including a canary suite
