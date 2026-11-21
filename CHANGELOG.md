@@ -121,6 +121,11 @@ Windows, macOS and Linux.
   away in `mask status` (the `X-Mask-*` headers stay as they were)
 - The OGP card is regenerated from `docs/og-card.html`; the previous one still
   advertised "Python 3.12+" and `branchead.com/mask`
+- The example in the hero flow and on the OGP card now uses an address instead
+  of a phone number. A phone-shaped example invites the reader to ask whose
+  number it is; the address is the Imperial Palace's public location
+  (`東京都千代田区千代田1-1`), and the figure caption says so
+- The footer ends with a `branchead.com` credit line
 
 ### Tests
 

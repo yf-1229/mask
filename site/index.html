@@ -359,6 +359,16 @@
   .foot-links a { text-decoration: none; }
   .foot-links a:hover { color: var(--ink); }
 
+  .foot-note { margin-top: 2px; }
+
+  .foot-credit { margin-top: 14px; font-size: 13px; }
+  .foot-credit a {
+    text-decoration: none;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 1px;
+  }
+  .foot-credit a:hover { color: var(--ink); border-color: var(--ink); }
+
   @media (max-width: 640px) {
     .wrap { padding: 0 16px; }
     pre { font-size: 11px; padding: 10px 12px; }
@@ -405,15 +415,15 @@
       <p class="lede-tail">やることは、それだけです。</p>
 
       <figure class="flow">
-        <figcaption>1回のやり取りで起きること</figcaption>
+        <figcaption>1回のやり取りで起きること（例の住所は皇居の所在地）</figcaption>
         <div class="row">
           <span class="who">あなた</span>
-          <span class="what">佐藤美咲さんに 090-4821-7736 まで連絡して</span>
+          <span class="what">佐藤美咲さんに 東京都千代田区千代田1-1 まで送って</span>
         </div>
         <div class="arrow"><span>↓ mask が置き換えて送る</span></div>
         <div class="row">
           <span class="who">LLM</span>
-          <span class="what"><span class="tok">⟦人名1⟧</span>さんに <span class="tok">⟦電話2⟧</span> まで連絡して</span>
+          <span class="what"><span class="tok">⟦人名1⟧</span>さんに <span class="tok">⟦住所2⟧</span> まで送って</span>
         </div>
         <div class="arrow"><span>↓ 返事も記号のまま</span></div>
         <div class="row">
@@ -513,7 +523,8 @@ export ANTHROPIC_API_KEY=&lt;gateway.token&gt;</code></pre>
       <a href="https://github.com/yf-1229/mask/blob/main/SECURITY.md" rel="noopener">Security</a>
       <a href="https://github.com/yf-1229/mask/blob/main/LICENSE" rel="noopener">MIT License</a>
     </nav>
-    <p>© 2026 Yuta Fujiwara · このページは外部リクエストを出しません。</p>
+    <p class="foot-note">このページは外部リクエストを出しません。</p>
+    <p class="foot-credit">© 2026 Yuta Fujiwara · <a href="https://branchead.com" rel="noopener">branchead.com ↗</a></p>
   </footer>
 
 </div>

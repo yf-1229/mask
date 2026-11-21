@@ -119,8 +119,8 @@
 
 - [ ] **Step 2: 4 段のコード例を grid-2 の card で並べる**
 
-  ① 入力（実名入り chat）: `mask chat "佐藤美咲さんに 090-4821-7736 まで連絡して"` と、送られる JSON の `content` が `⟦人名7⟧さんに ⟦電話3⟧ まで…` になっている対比。
-  ② マスク層: `mask check` の出力（⟦人名7⟧ / ⟦電話3⟧）と、`X-Mask-Masked: 2` ヘッダ。
+  ① 入力（実名入り chat）: `mask chat "佐藤美咲さんに 東京都千代田区千代田1-1 まで送って"` と、送られる JSON の `content` が `⟦人名7⟧さんに⟦住所3⟧ まで…` になっている対比。
+  ② マスク層: `mask check` の出力（⟦人名7⟧ / ⟦住所3⟧）と、`X-Mask-Masked: 2` ヘッダ。
   ③ LLM 応答: 疑似名を含んだ応答文字列と `X-Mask-In: v1/messages` / `X-Mask-Restored: 2` / `X-Mask-Nonce: …` ヘッダ。
   ④ 手元で復元: ターミナル出力 `佐藤美咲さん宛にご案内を送りました。[mask] masked 2 / restored 2 / unresolved 0`。
 
