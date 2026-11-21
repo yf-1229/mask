@@ -258,6 +258,18 @@ Requires the [Rust toolchain](https://rustup.rs) (1.82+). Nothing else: TLS is
 rustls with bundled roots, crypto is pure Rust, and the release profile is
 stripped and LTO'd (~7 MB).
 
+Building does not put `mask` on your `PATH` — the binary stays in `target/`. If
+you want the bare `mask …` commands this README uses, install it once:
+
+```sh
+cargo install --path . --root "$HOME/.local"   # -> ~/.local/bin/mask
+mask --version
+```
+
+`~/.local/bin` is on `PATH` on most distributions; if `mask: command not found`
+still appears, use `./target/release/mask` instead, or add the directory to your
+shell profile.
+
 ### Client configuration (once)
 
 | Client | Setting |
@@ -265,6 +277,17 @@ stripped and LTO'd (~7 MB).
 | OpenAI-compatible harness | base URL `http://127.0.0.1:8080/v1`, API key = `gateway.token` (any dummy if unset) |
 | Claude Code (Anthropic-compatible) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`, `ANTHROPIC_API_KEY=gateway.token` |
 | Shell | `mask chat` / `mask check` / `mask status` |
+
+## First run — the four things that actually go wrong
+
+Every message here names the fix, so a refusal never looks like a broken build.
+
+| Symptom | Why | Fix |
+|---|---|---|
+| `mask: command not found` | built, never installed | `cargo install --path . --root "$HOME/.local"` |
+| `mask status` → `gateway … unreachable` | nothing is serving | run `mask serve` (in your own terminal) |
+| `mask serve` → `refusing to start the gateway: this shell belongs to an AI agent` | you are inside an agent's shell (`VIBE_SESSION`, `CLAUDECODE`, …) — the guard from the section above | start it from a normal terminal, or pass `--allow-agent-host` deliberately |
+| `admin channel closed — no operator terminal` | `mask serve` had no tty, so no operator token was minted; `/admin/*` is refused | run `mask serve` from an interactive terminal, or set `gateway.admin_require_human = false` |
 
 ## Configuration (`mask.toml`)
 

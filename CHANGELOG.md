@@ -109,6 +109,12 @@ Windows, macOS and Linux.
 
 - `mask check` (detection dry run, no network), `mask chat` (one round trip
   through a running gateway), `mask status`, `mask serve`
+- Install docs say out loud that `cargo build` leaves the binary in `target/`,
+  and that `cargo install --path . --root "$HOME/.local"` is what makes
+  `mask …` work. A first-run table maps every message this tool can print —
+  `command not found`, `gateway unreachable`, the agent-shell refusal, a closed
+  admin channel — to its cause and its fix: a guard that reads as "broken" to
+  the human it protects has failed at its only job
 
 ### Website
 

@@ -249,6 +249,18 @@ cp mask.toml.example mask.toml
 必要なのは [Rust ツールチェーン](https://rustup.rs) (1.82+) だけ。TLS は rustls、
 暗号は pure Rust、release プロファイルは LTO + strip 済み (約7MB)。
 
+ビルドしても `mask` は `PATH` に入りません — バイナリは `target/` に残ります。
+この README に出てくる `mask …` をそのまま使いたい場合は一度だけ:
+
+```sh
+cargo install --path . --root "$HOME/.local"   # -> ~/.local/bin/mask
+mask --version
+```
+
+多くのディストリビューションでは `~/.local/bin` が `PATH` に入っています。
+それでも `mask: コマンドが見つかりません` と出る場合は `./target/release/mask`
+を使うか、シェルの設定にディレクトリを追加してください。
+
 ### クライアント側の設定 (一度だけ)
 
 | クライアント | 設定 |
@@ -256,6 +268,17 @@ cp mask.toml.example mask.toml
 | OpenAI 互換ハーネス | base URL `http://127.0.0.1:8080/v1`、API key = `gateway.token` (未設定なら任意のダミー) |
 | Claude Code (Anthropic互換) | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=gateway.token` |
 | シェル | `mask chat` / `mask check` / `mask status` |
+
+## 最初のつまずきどころ (実際に起きる 4 つ)
+
+どれも「壊れた」のではなく理由が返ります。メッセージと対処の対応表です。
+
+| 症状 | 理由 | 対処 |
+|---|---|---|
+| `mask: コマンドが見つかりません` | ビルドしたが `PATH` に入れていない | `cargo install --path . --root "$HOME/.local"` |
+| `mask status` → `gateway … unreachable` | ゲートウェイが起動していない | `mask serve` を実行 (自分のターミナルで) |
+| `mask serve` → `refusing to start the gateway: this shell belongs to an AI agent` | AI エージェントのシェル内 (`VIBE_SESSION` / `CLAUDECODE` 等) — 上の節のガード | 通常のターミナルから起動する。意思があるなら `--allow-agent-host` |
+| `admin channel closed — no operator terminal` | `mask serve` に tty が無く、オペレータトークンが発行されていない (`/admin/*` は拒否) | 対話ターミナルから `mask serve`、または `gateway.admin_require_human = false` |
 
 ## 設定 (mask.toml)
 
