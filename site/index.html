@@ -1136,6 +1136,26 @@
   }
   .config-value.note { font-family: var(--font-sans); font-size: 12.5px; color: var(--mid); }
 
+  /* ------------------------------------------------- restructured blocks */
+
+  .usage-entries { margin-top: var(--section-gap); }
+  .usage-lead {
+    font-size: var(--text-body);
+    line-height: 1.8;
+    color: var(--mid);
+    margin-bottom: 20px;
+  }
+
+  .mechanism-block { margin-top: 48px; }
+  .mechanism-block:first-of-type { margin-top: 0; }
+  .subhead {
+    font-size: var(--text-heading-sm);
+    font-weight: 600;
+    line-height: 1.33;
+    letter-spacing: -0.025em;
+    margin-bottom: 20px;
+  }
+
   /* -------------------------------------------------------------- footer */
 
   .site-footer {
@@ -1328,7 +1348,7 @@
 <a class="skip" href="#main">本文へスキップ</a>
 
 <aside class="sidebar">
-  <a class="brand" href="#top" aria-label="mask — ページ上部へ">
+  <a class="brand" href="#overview" aria-label="mask — ページ上部へ">
     <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
       <rect width="32" height="32" rx="9" fill="#0a0a0a"/>
       <rect x="9" y="14" width="14" height="4" rx="2" fill="#fafafa"/>
@@ -1347,11 +1367,10 @@
   </button>
 
   <nav class="side-nav" aria-label="セクション">
-    <a href="#entrances" data-nav><span class="num">01</span>入口</a>
-    <a href="#defense" data-nav><span class="num">02</span>多層防御</a>
-    <a href="#indicators" data-nav><span class="num">03</span>インジケータ</a>
-    <a href="#handoff" data-nav><span class="num">04</span>封筒</a>
-    <a href="#quickstart" data-nav><span class="num">05</span>導入</a>
+    <a href="#overview" data-nav><span class="num">01</span>概要</a>
+    <a href="#usage" data-nav><span class="num">02</span>使い方</a>
+    <a href="#examples" data-nav><span class="num">03</span>具体的な例</a>
+    <a href="#mechanism" data-nav><span class="num">04</span>仕組み・保証</a>
   </nav>
 
   <div class="side-foot">
@@ -1366,7 +1385,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <nav class="crumbs" aria-label="パンくず">
-        <a href="#top">mask</a>
+        <a href="#overview">mask</a>
         <span class="sep" aria-hidden="true">/</span>
         <span aria-current="page">概要</span>
       </nav>
@@ -1376,7 +1395,7 @@
             <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/>
           </svg>
         </a>
-        <a class="btn btn-primary btn-sm" href="#quickstart">5分で試す</a>
+        <a class="btn btn-primary btn-sm" href="#usage">5分で試す</a>
       </div>
     </div>
   </header>
@@ -1384,15 +1403,15 @@
   <main id="main" tabindex="-1">
     <div class="page">
 
-      <section class="hero" id="top">
+      <section class="hero" id="overview">
         <div class="hero-grid">
           <div class="hero-copy">
-            <span class="caption">PII pseudonymization gateway</span>
+            <span class="caption">01 — 概要</span>
             <h1>実名は、LLMに渡らない。<br>帰り道も、<span class="redact">mask</span> が保証する。</h1>
             <p class="lead">
-              mask は LLM API の前に置くローカルゲートウェイです。名前・電話番号・住所は、外部に出る前に <code>⟦人名7⟧</code> のような不透明な疑似名へ。応答は、あなたの手元で実名に戻ります。</p>
+              LLM に実名は渡したくない。でも応答は実名で読みたい。mask はその両方を叶えるローカルゲートウェイです。名前・電話番号・住所は外部に出る前に不透明な疑似名へ置換され、応答は手元で実名に戻ります。</p>
             <div class="hero-actions">
-              <a class="btn btn-primary" href="#quickstart">
+              <a class="btn btn-primary" href="#usage">
                 5分で試す<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M5 12h14M13 6l6 6-6 6"/>
                 </svg>
@@ -1402,7 +1421,7 @@
                   <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.43-2.69 5.41-5.25 5.69.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/>
                 </svg>
                 ソースを読む</a>
-              <a class="link" href="#indicators">信頼性インジケータ <span aria-hidden="true">→</span></a>
+              <a class="link" href="#mechanism">信頼性インジケータ <span aria-hidden="true">→</span></a>
             </div>
             <div class="hero-meta">
               <span>Python 3.12+</span>
@@ -1486,16 +1505,129 @@
         </div>
       </section>
 
-      <section id="entrances" class="section entrances">
+      <section id="usage" class="section">
         <div class="section-head" data-reveal>
           <div>
-            <span class="caption">01 — Entrances</span>
-            <h2>三つの入口、一つの保証。</h2>
+            <span class="caption">02 — 使い方</span>
+            <h2>まず、これだけ。</h2>
           </div>
-          <p class="section-sub">
-            どの門から入っても、外に出る前に同じマスク層・リークゲート・インジケータを通ります。弱い経路はありません。</p>
+          <p class="section-sub">Python 3.12+ と uv だけ。上流の API キーはゲートウェイの中に留まります。<br>あとは既存ツールの base URL を差し替えるだけです。</p>
         </div>
 
+        <div class="quick-grid">
+          <div class="steps" data-reveal>
+            <div class="step">
+              <span class="step-num">1</span>
+              <div>
+                <h3>クローンと依存関係</h3>
+                <div class="code">
+                  <div class="code-head">
+                    <span class="code-lang">shell</span>
+                    <button class="copy" type="button" data-copy>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                      </svg>
+                      コピー</button>
+                  </div>
+                  <pre><code>git clone https://github.com/yf-1229/mask.git &amp;&amp; cd mask
+uv sync</code></pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-num">2</span>
+              <div>
+                <h3>上流を設定</h3>
+                <div class="code">
+                  <div class="code-head">
+                    <span class="code-lang">shell</span>
+                    <button class="copy" type="button" data-copy>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                      </svg>
+                      コピー</button>
+                  </div>
+                  <pre><code>cp mask.toml.example mask.toml
+<span class="c"># upstream.base_url / upstream.api_key を編集</span></code></pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="step">
+              <span class="step-num">3</span>
+              <div>
+                <h3>起動</h3>
+                <div class="code">
+                  <div class="code-head">
+                    <span class="code-lang">shell</span>
+                    <button class="copy" type="button" data-copy>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                      </svg>
+                      コピー</button>
+                  </div>
+                  <pre><code>uv run mask serve</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="card config-card" data-reveal>
+            <div class="card-head">
+              <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 4l4 4M14 6l4 4"/>
+              </svg>
+              <h3 class="card-title">クライアント設定</h3>
+              <span class="badge badge-outline">ONCE</span>
+            </div>
+            <div class="config-body">
+              <div class="config-row">
+                <span class="config-name">OpenAI 互換</span>
+                <div class="config-value">base URL http://127.0.0.1:8080/v1<br>API key = gateway.token</div>
+              </div>
+              <div class="config-row">
+                <span class="config-name">Anthropic 互換</span>
+                <div class="config-value">ANTHROPIC_BASE_URL=http://127.0.0.1:8080<br>ANTHROPIC_API_KEY=gateway.token</div>
+              </div>
+              <div class="config-row">
+                <span class="config-name">シェル</span>
+                <div class="config-value">mask chat / check / status</div>
+              </div>
+              <div class="config-row">
+                <span class="config-name">辞書タイプ</span>
+                <div class="badge-row">
+                  <span class="badge badge-soft">person</span>
+                  <span class="badge badge-soft">org</span>
+                  <span class="badge badge-soft">location</span>
+                  <span class="badge badge-soft">address</span>
+                  <span class="badge badge-soft">phone</span>
+                  <span class="badge badge-soft">email</span>
+                  <span class="badge badge-soft">account</span>
+                </div>
+              </div>
+              <div class="config-row">
+                <span class="config-name">テスト</span>
+                <div class="code">
+                  <div class="code-head">
+                    <span class="code-lang">shell</span>
+                    <button class="copy" type="button" data-copy>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                      </svg>
+                      コピー</button>
+                  </div>
+                  <pre><code>uv run pytest</code></pre>
+                </div>
+                <p class="config-value note">カナリアテスト込み。上流に実値が出ないことがここで証明されます。</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+
+        <div class="usage-entries" data-reveal>
+          <p class="usage-lead">用途で入口を選びます。どれから入っても、同じマスク層とリークゲートを通ります。</p>
         <div class="grid-2">
           <article class="card" data-reveal>
             <div class="card-head">
@@ -1613,13 +1745,154 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
             </div>
           </article>
         </div>
+        </div>
       </section>
 
-      <section id="defense" class="section">
+      <section id="examples" class="section">
+        <div class="section-head" data-reveal>
+          <div>
+            <span class="caption">03 — 具体的な例</span>
+            <h2>1リクエストが、こう往復する。</h2>
+          </div>
+          <p class="section-sub">実名はゲートウェイの外に出ず、疑似名だけが LLM へ。応答は手元で実名に戻ります。以下は実際の入出力の例です。</p>
+        </div>
+
+        <div class="grid-2">
+          <article class="card" data-reveal>
+            <div class="card-head">
+              <span class="badge badge-solid">01</span>
+              <h3 class="card-title">入力 — 実名入り</h3>
+              <span class="badge badge-outline">CLIENT</span>
+            </div>
+            <p>ユーザーはいつも通り、実名で依頼します。</p>
+            <div class="code">
+              <div class="code-head">
+                <span class="code-lang">shell</span>
+                <button class="copy" type="button" data-copy>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                  </svg>
+                  コピー</button>
+              </div>
+              <pre><code><span class="p">$</span> mask chat "佐藤美咲さんに 090-4821-7736 まで連絡して"</code></pre>
+            </div>
+            <p>上流へ送る JSON の <code>content</code> は、送信前に書き換わります。</p>
+            <div class="code">
+              <div class="code-head">
+                <span class="code-lang">json</span>
+                <button class="copy" type="button" data-copy>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                  </svg>
+                  コピー</button>
+              </div>
+              <pre><code>{
+  <span class="c">// 上流へ送られるペイロード</span>
+  "messages": [{
+    "role": "user",
+    "content": "⟦人名7⟧さんに ⟦電話3⟧ まで連絡して"
+  }]
+}</code></pre>
+            </div>
+          </article>
+
+          <article class="card" data-reveal>
+            <div class="card-head">
+              <span class="badge badge-solid">02</span>
+              <h3 class="card-title">マスク — 疑似名へ</h3>
+              <span class="badge badge-outline">GATEWAY</span>
+            </div>
+            <p>検出した実値を、この応答だけの一意なトークンへ置換します。</p>
+            <div class="code">
+              <div class="code-head">
+                <span class="code-lang">shell</span>
+                <button class="copy" type="button" data-copy>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                  </svg>
+                  コピー</button>
+              </div>
+              <pre><code><span class="p">$</span> mask check "090-4821-7736"
+⟦電話3⟧</code></pre>
+            </div>
+            <p>置換した数はレスポンスヘッダで確認できます。</p>
+            <dl class="kv">
+              <div class="kv-row"><dt class="kv-key">X-Mask</dt><dd class="kv-val"><b>on</b></dd></div>
+              <div class="kv-row"><dt class="kv-key">X-Mask-In</dt><dd class="kv-val"><b>v1/messages</b> — 通った入口</dd></div>
+              <div class="kv-row"><dt class="kv-key">X-Mask-Masked</dt><dd class="kv-val"><b>2</b> — 人名と電話</dd></div>
+              <div class="kv-row"><dt class="kv-key">X-Mask-Leak-Gate</dt><dd class="kv-val"><b>block</b></dd></div>
+            </dl>
+          </article>
+
+          <article class="card" data-reveal>
+            <div class="card-head">
+              <span class="badge badge-solid">03</span>
+              <h3 class="card-title">応答 — 疑似名のまま</h3>
+              <span class="badge badge-outline">LLM API</span>
+            </div>
+            <p>LLM が見るのは疑似名だけ。実値は渡りません。</p>
+            <div class="code">
+              <div class="code-head">
+                <span class="code-lang">json</span>
+                <button class="copy" type="button" data-copy>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                  </svg>
+                  コピー</button>
+              </div>
+              <pre><code>{
+  "content": [{
+    "type": "text",
+    "text": "⟦人名7⟧さん宛にご案内を送りました。折り返し ⟦電話3⟧ までご連絡ください。"
+  }]
+}</code></pre>
+            </div>
+            <dl class="kv">
+              <div class="kv-row"><dt class="kv-key">X-Mask-Restored</dt><dd class="kv-val"><b>2</b> — 復元したトークン</dd></div>
+              <div class="kv-row"><dt class="kv-key">X-Mask-Nonce</dt><dd class="kv-val"><b>734dc18c9d7a</b> — 応答ごとに鋳造</dd></div>
+              <div class="kv-row"><dt class="kv-key">X-Mask-Unresolved</dt><dd class="kv-val"><b>0</b> — 未復元なし</dd></div>
+            </dl>
+          </article>
+
+          <article class="card" data-reveal>
+            <div class="card-head">
+              <span class="badge badge-solid">04</span>
+              <h3 class="card-title">復元 — 手元で実名へ</h3>
+              <span class="badge badge-outline">CLIENT</span>
+            </div>
+            <p>帰り道でトークンを実名に戻してから、画面に表示します。</p>
+            <div class="code">
+              <div class="code-head">
+                <span class="code-lang">shell</span>
+                <button class="copy" type="button" data-copy>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+                  </svg>
+                  コピー</button>
+              </div>
+              <pre><code><span class="p">$</span> mask chat "佐藤美咲さんに 090-4821-7736 まで連絡して"
+佐藤美咲さん宛にご案内を送りました。折り返し 090-4821-7736 までご連絡ください。
+<span class="c">[mask] masked 2 / restored 2 / unresolved 0</span></code></pre>
+            </div>
+            <p>マッピングはプロセス内メモリのみ。ディスクにも外部にも出ません。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="mechanism" class="section">
+        <header class="section-head" data-reveal>
+          <div>
+            <span class="caption">04 — 仕組み・保証</span>
+            <h2>なぜ漏れないかを、構造で示す。</h2>
+          </div>
+          <p class="section-sub">マスクの精度に依存しません。検出し損ねた PII は、送信直前のリークゲートでリクエストごと棄却されます。</p>
+        </header>
+
+        <div class="mechanism-block">
         <div class="defense-grid">
           <div class="defense-aside" data-reveal>
-            <span class="caption">02 — Defense in depth</span>
-            <h2>「絶対に外に出さない」を、構造で保証する。</h2>
+            <span class="caption">防御 — 5 layers</span>
+            <h3 class="subhead">5つの層で、漏れをふさぐ。</h3>
             <p class="section-sub">
               マスクの精度に依存しません。検出し損ねた PII は、送信直前のリークゲートでリクエストごと棄却されます。</p>
             <div class="aside-note">
@@ -1673,17 +1946,10 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
             </li>
           </ol>
         </div>
-      </section>
-
-      <section id="indicators" class="section">
-        <div class="section-head" data-reveal>
-          <div>
-            <span class="caption">03 — Indicators</span>
-            <h2>保証は、見えなければ信じられない。</h2>
-          </div>
-          <p class="section-sub">
-            mask は「何を守ったか」を数値で常時表示します。実値・トークン・経路は決して含みません。</p>
         </div>
+
+        <div class="mechanism-block">
+          <h3 class="subhead">インジケータ — 保証を見える化する</h3>
 
         <div class="grid-2">
           <article class="card" data-reveal>
@@ -1764,17 +2030,10 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
               既定では <code>status_public = false</code> のため拒否されます (fail-closed)。公開を選んだときだけ、このページは数字を読みます。</p>
           </div>
         </div>
-      </section>
-
-      <section id="handoff" class="section">
-        <div class="section-head" data-reveal>
-          <div>
-            <span class="caption">04 — Handoff</span>
-            <h2>対応表は、暗号文だけでチームに渡す。</h2>
-          </div>
-          <p class="section-sub">
-            マッピングテーブルは再識別の鍵。平文で出る経路は原理的に存在しません。共有は暗号化された封筒でのみ行われます。</p>
         </div>
+
+        <div class="mechanism-block">
+          <h3 class="subhead">封筒 — 対応表は暗号文で渡す</h3>
 
         <div class="grid-2">
           <article class="card" data-reveal>
@@ -1841,126 +2100,6 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1</code></pre>
 
         <p class="section-note" data-reveal>
           衝突するトークンIDは上書きされず、競合として報告されます。誤った人物への復元は構造的に起きません。</p>
-      </section>
-
-      <section id="quickstart" class="section">
-        <div class="section-head" data-reveal>
-          <div>
-            <span class="caption">05 — Quickstart</span>
-            <h2>5分で、最初のマスクまで。</h2>
-          </div>
-          <p class="section-sub">Python 3.12+ と uv だけ。上流の API キーはゲートウェイの中に留まります。</p>
-        </div>
-
-        <div class="quick-grid">
-          <div class="steps" data-reveal>
-            <div class="step">
-              <span class="step-num">1</span>
-              <div>
-                <h3>クローンと依存関係</h3>
-                <div class="code">
-                  <div class="code-head">
-                    <span class="code-lang">shell</span>
-                    <button class="copy" type="button" data-copy>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
-                      </svg>
-                      コピー</button>
-                  </div>
-                  <pre><code>git clone https://github.com/yf-1229/mask.git &amp;&amp; cd mask
-uv sync</code></pre>
-                </div>
-              </div>
-            </div>
-
-            <div class="step">
-              <span class="step-num">2</span>
-              <div>
-                <h3>上流を設定</h3>
-                <div class="code">
-                  <div class="code-head">
-                    <span class="code-lang">shell</span>
-                    <button class="copy" type="button" data-copy>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
-                      </svg>
-                      コピー</button>
-                  </div>
-                  <pre><code>cp mask.toml.example mask.toml
-<span class="c"># upstream.base_url / upstream.api_key を編集</span></code></pre>
-                </div>
-              </div>
-            </div>
-
-            <div class="step">
-              <span class="step-num">3</span>
-              <div>
-                <h3>起動</h3>
-                <div class="code">
-                  <div class="code-head">
-                    <span class="code-lang">shell</span>
-                    <button class="copy" type="button" data-copy>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
-                      </svg>
-                      コピー</button>
-                  </div>
-                  <pre><code>uv run mask serve</code></pre>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <aside class="card config-card" data-reveal>
-            <div class="card-head">
-              <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 4l4 4M14 6l4 4"/>
-              </svg>
-              <h3 class="card-title">クライアント設定</h3>
-              <span class="badge badge-outline">ONCE</span>
-            </div>
-            <div class="config-body">
-              <div class="config-row">
-                <span class="config-name">OpenAI 互換</span>
-                <div class="config-value">base URL http://127.0.0.1:8080/v1<br>API key = gateway.token</div>
-              </div>
-              <div class="config-row">
-                <span class="config-name">Anthropic 互換</span>
-                <div class="config-value">ANTHROPIC_BASE_URL=http://127.0.0.1:8080<br>ANTHROPIC_API_KEY=gateway.token</div>
-              </div>
-              <div class="config-row">
-                <span class="config-name">シェル</span>
-                <div class="config-value">mask chat / check / status</div>
-              </div>
-              <div class="config-row">
-                <span class="config-name">辞書タイプ</span>
-                <div class="badge-row">
-                  <span class="badge badge-soft">person</span>
-                  <span class="badge badge-soft">org</span>
-                  <span class="badge badge-soft">location</span>
-                  <span class="badge badge-soft">address</span>
-                  <span class="badge badge-soft">phone</span>
-                  <span class="badge badge-soft">email</span>
-                  <span class="badge badge-soft">account</span>
-                </div>
-              </div>
-              <div class="config-row">
-                <span class="config-name">テスト</span>
-                <div class="code">
-                  <div class="code-head">
-                    <span class="code-lang">shell</span>
-                    <button class="copy" type="button" data-copy>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
-                      </svg>
-                      コピー</button>
-                  </div>
-                  <pre><code>uv run pytest</code></pre>
-                </div>
-                <p class="config-value note">カナリアテスト込み。上流に実値が出ないことがここで証明されます。</p>
-              </div>
-            </div>
-          </aside>
         </div>
       </section>
 
@@ -1970,7 +2109,7 @@ uv sync</code></pre>
       <div class="page">
         <div class="footer-grid">
           <div class="footer-brand">
-            <a class="brand" href="#top" aria-label="mask — ページ上部へ">
+            <a class="brand" href="#overview" aria-label="mask — ページ上部へ">
               <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
                 <rect width="32" height="32" rx="9" fill="#0a0a0a"/>
                 <rect x="9" y="14" width="14" height="4" rx="2" fill="#fafafa"/>
@@ -2020,23 +2159,17 @@ uv sync</code></pre>
       <span class="kbd">esc</span>
     </div>
     <div class="palette-list" id="palette-list">
-      <a href="#top" data-search="概要 とは overview intro mask gateway ローカル">
+      <a href="#overview" data-search="概要 とは overview intro mask gateway ローカル なに 目的">
         <span class="p-num">00</span><span class="p-title">概要</span><span class="p-hint">mask とは</span>
       </a>
-      <a href="#entrances" data-search="入口 エージェント シェル ウェブ proxy cli anthropic openai">
-        <span class="p-num">01</span><span class="p-title">三つの入口</span><span class="p-hint">proxy / CLI / web</span>
+      <a href="#usage" data-search="使い方 導入 インストール 設定 quickstart install setup uv base url エージェント シェル cli">
+        <span class="p-num">01</span><span class="p-title">使い方</span><span class="p-hint">導入・設定・入口</span>
       </a>
-      <a href="#defense" data-search="多層防御 防御 リークゲート fail-closed defense leak gate">
-        <span class="p-num">02</span><span class="p-title">多層防御</span><span class="p-hint">fail-closed</span>
+      <a href="#examples" data-search="例 具体例 実例 往復 マスク 復元 入出力 chat ヘッダ x-mask example">
+        <span class="p-num">02</span><span class="p-title">具体的な例</span><span class="p-hint">1リクエストの往復</span>
       </a>
-      <a href="#indicators" data-search="インジケータ 指標 status ヘッダ header 可視化 indicators">
-        <span class="p-num">03</span><span class="p-title">インジケータ</span><span class="p-hint">X-Mask / status</span>
-      </a>
-      <a href="#handoff" data-search="封筒 対応表 handoff export import 暗号 パスフレーズ">
-        <span class="p-num">04</span><span class="p-title">封筒</span><span class="p-hint">encrypted handoff</span>
-      </a>
-      <a href="#quickstart" data-search="導入 インストール 設定 quickstart install setup uv">
-        <span class="p-num">05</span><span class="p-title">導入</span><span class="p-hint">5 minutes</span>
+      <a href="#mechanism" data-search="仕組み 保証 防御 リークゲート インジケータ 封筒 暗号 fail-closed defense leak gate handoff">
+        <span class="p-num">03</span><span class="p-title">仕組み・保証</span><span class="p-hint">defense / indicators / handoff</span>
       </a>
     </div>
     <div class="palette-foot">
