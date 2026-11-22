@@ -30,6 +30,10 @@ info() { printf '%s\n' "$*"; }
 
 warn() { printf 'mask install: warning: %s\n' "$*" >&2; }
 
+# A mirror reached with https://user:token@host/ is a normal configuration, and
+# the token must not end up in a message someone pastes into an issue.
+redact() { printf '%s\n' "$1" | sed 's|^\([A-Za-z][A-Za-z0-9+.-]*://\)[^/]*@|\1***@|'; }
+
 usage() {
 	cat <<EOF
 Install $PROG from the $REPO releases.
@@ -146,11 +150,16 @@ bin_dir="$PREFIX/bin"
 bin="$bin_dir/$PROG"
 
 if [ "$UNINSTALL" = 1 ]; then
-	if [ -e "$bin" ]; then
+	if [ ! -e "$bin" ]; then
+		info "nothing installed at $bin"
+	elif [ "$DRY_RUN" = 1 ]; then
+		# --dry-run is the flag people are told to try before trusting the
+		# script; it must not be the one path that deletes something.
+		info "would remove $bin"
+		exit 0
+	else
 		rm -f "$bin" || die "cannot remove $bin (try sudo)"
 		info "removed $bin"
-	else
-		info "nothing installed at $bin"
 	fi
 	info "left in place on purpose: your config (~/.config/mask/mask.toml) and dictionary"
 	exit 0
@@ -192,9 +201,9 @@ sums_url=$(asset_url SHA256SUMS)
 if [ "$DRY_RUN" = 1 ]; then
 	info "platform   $TARGET"
 	info "release    $TAG"
-	info "download   $url"
+	info "download   $(redact "$url")"
 	if [ "$VERIFY" = 1 ]; then
-		info "verify     $sums_url"
+		info "verify     $(redact "$sums_url")"
 	fi
 	info "install    $bin"
 	exit 0
@@ -204,36 +213,82 @@ fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# The host of a URL, without scheme, credentials, port or path.
+#
+# A prefix match on "http://127.0.0.1" is not an origin check: `curl` reads
+# `http://127.0.0.1:9999@evil.example/x` as credentials for evil.example, and
+# `[::1]evil.example` is a name, not the address in brackets. So the host is
+# parsed out, and a bracket form is only accepted when nothing but an optional
+# port follows it.
+url_host() {
+	_rest=${1#*://}
+	_rest=${_rest%%[/?#]*}
+	case "$_rest" in
+	*@*) _rest=${_rest##*@} ;; # the caller refuses credentials; belt and braces
+	esac
+	case "$_rest" in
+	\[*)
+		_host=${_rest%%]*}
+		case "${_rest#"$_host"]}" in
+		"" | :*) printf '%s]\n' "$_host" ;;
+		*) printf '%s\n' "$_rest" ;;
+		esac
+		;;
+	*) printf '%s\n' "${_rest%%:*}" ;;
+	esac
+}
+
 fetch() { # url dest
-	url=$1
-	dest=$2
-	case "$url" in
+	_url=$1
+	_dest=$2
+	case "$_url" in
 	file://*)
 		# A local mirror for tests and airgapped hosts. The caller owns the
 		# message, because "cannot read the binary" and "cannot read the
 		# checksums" mean different things to the user.
-		cp "${url#file://}" "$dest" || return 1
+		cp "${_url#file://}" "$_dest" || return 1
 		return 0
 		;;
+	esac
+
+	# Credentials in a plain-http URL are how a loopback-looking prefix hides a
+	# remote host. Over https they are a normal way to reach a private mirror, so
+	# the refusal lives in the http arm below, not here.
+	case "$_url" in
 	https://*) ;;
-	http://localhost/* | http://127.0.0.1/* | http://127.0.0.1:* | "http://[::1]"*)
-		warn "plain http from a loopback address; the download is not protected in transit"
-		;;
 	http://*)
-		# The binary is installed and then runs with your API key. A plain-http
-		# mirror anywhere but loopback is a man in the middle by construction.
-		die "refusing plain http from $(printf '%s' "$url" | sed -e 's|^http://||' -e 's|[:/].*||') — use https, or a file:// mirror"
+		_authority=${_url#*://}
+		_authority=${_authority%%[/?#]*}
+		case "$_authority" in
+		*@*) die "refusing a URL with credentials in it — nothing was downloaded" ;;
+		esac
+		# The binary is installed and then runs with your API key. Plain http
+		# from anywhere but this machine is a man in the middle by construction.
+		_host=$(url_host "$_url" | tr '[:upper:]' '[:lower:]')
+		case "$_host" in
+		localhost | 127.0.0.1 | "[::1]")
+			warn "plain http from a loopback address; the download is not protected in transit"
+			;;
+		"")
+			die "refusing plain http to a URL with no host — use https, or a file:// mirror"
+			;;
+		*) die "refusing plain http from $_host — use https, or a file:// mirror" ;;
+		esac
 		;;
-	*) die "unsupported URL scheme: $url" ;;
+	*) die "unsupported URL scheme: $(redact "$_url")" ;;
 	esac
 
 	if have curl; then
-		case "$url" in
-		https://*) curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 -o "$dest" "$url" ;;
-		*) curl -fsSL --retry 2 -o "$dest" "$url" ;;
+		case "$_url" in
+		https://*) curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 -o "$_dest" "$_url" ;;
+		*) curl -fsSL --retry 2 -o "$_dest" "$_url" ;;
 		esac
 	elif have wget; then
-		wget -q -O "$dest" "$url"
+		case "$_url" in
+		# wget follows a redirect to plain http unless it is told not to.
+		https://*) wget --https-only -q -O "$_dest" "$_url" ;;
+		*) wget -q -O "$_dest" "$_url" ;;
+		esac
 	else
 		die "neither curl nor wget is installed"
 	fi
@@ -258,9 +313,13 @@ need_download_dir() {
 
 tmp=
 sums=
+staged=
 cleanup() {
 	[ -n "$tmp" ] && rm -f "$tmp"
 	[ -n "$sums" ] && rm -f "$sums"
+	# A signal between the copy and the rename would otherwise leave a
+	# dotfile in the user's bin directory forever.
+	[ -n "$staged" ] && rm -f "$staged"
 	return 0
 }
 trap cleanup EXIT INT TERM HUP
@@ -269,14 +328,14 @@ need_download_dir
 
 tmp=$(mktemp "${TMPDIR:-/tmp}/mask-download.XXXXXX") || die "mktemp failed"
 info "downloading $PROG $TAG ($TARGET)"
-fetch "$url" "$tmp" || die "download failed: $url"
-[ -s "$tmp" ] || die "downloaded an empty file from $url"
+fetch "$url" "$tmp" || die "download failed: $(redact "$url")"
+[ -s "$tmp" ] || die "downloaded an empty file from $(redact "$url")"
 
 if [ "$VERIFY" = 1 ]; then
 	sums=$(mktemp "${TMPDIR:-/tmp}/mask-sums.XXXXXX") || die "mktemp failed"
-	fetch "$sums_url" "$sums" || die "cannot fetch $sums_url — refusing to install an unverified binary (--no-verify overrides)"
+	fetch "$sums_url" "$sums" || die "cannot fetch $(redact "$sums_url") — refusing to install an unverified binary (--no-verify overrides)"
 	expected=$(awk -v n="$asset" '{ f = $2; sub(/^\*/, "", f); if (f == n) { print $1; exit } }' "$sums")
-	[ -n "$expected" ] || die "$sums_url has no line for $asset — refusing to install an unverified binary"
+	[ -n "$expected" ] || die "$(redact "$sums_url") has no line for $asset — refusing to install an unverified binary"
 	actual=$(sha256_of "$tmp")
 	if [ "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" != "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" ]; then
 		die "checksum mismatch for $asset — expected $expected, got $actual; nothing was installed"
@@ -299,12 +358,17 @@ chmod 0755 "$staged" || stage_failed "cannot make $staged executable"
 # mask: a half-written binary never sits on PATH.
 mv -f "$staged" "$bin" || stage_failed "cannot replace $bin"
 
-reported=$("$bin" --version 2>/dev/null) || reported=
-if [ -z "$reported" ]; then
-	warn "installed $bin, but it will not run here — probably a newer C library than this system has"
-	warn "on Debian/Ubuntu, use the .deb from https://github.com/$REPO/releases instead"
+if [ "$VERIFY" = 1 ]; then
+	reported=$("$bin" --version 2>/dev/null) || reported=
+	if [ -z "$reported" ]; then
+		warn "installed $bin, but it will not run here — probably a newer C library than this system has"
+		warn "on Debian/Ubuntu, use the .deb from https://github.com/$REPO/releases instead"
+	else
+		info "installed $reported -> $bin"
+	fi
 else
-	info "installed $reported -> $bin"
+	# With no checksum to trust, do not also execute what was downloaded.
+	info "installed (unverified) -> $bin"
 fi
 
 case ":${PATH:-}:" in
@@ -318,9 +382,11 @@ esac
 
 info ""
 info "next:"
-info "  1. mkdir -p ~/.config/mask && chmod 700 ~/.config/mask"
+info "  1. on a first install, create the config (skip this if you have one):"
+info "     mkdir -p ~/.config/mask && chmod 700 ~/.config/mask"
 info "     curl -fsSL https://raw.githubusercontent.com/$REPO/main/mask.toml.example \\"
-info "       -o ~/.config/mask/mask.toml && chmod 600 ~/.config/mask/mask.toml"
-info "     \$EDITOR ~/.config/mask/mask.toml   # upstream.base_url, upstream.api_key"
+info "       -o ~/.config/mask/mask.toml"
+info "     chmod 600 ~/.config/mask/mask.toml   # it will hold your upstream API key"
+info "     \$EDITOR ~/.config/mask/mask.toml    # upstream.base_url, upstream.api_key"
 info "  2. mask serve        # from your own terminal: the operator token is printed there"
 info "  3. point your client at http://127.0.0.1:8080"

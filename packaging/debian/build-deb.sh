@@ -108,7 +108,12 @@ detect_arch() { # binary -> dpkg architecture
 		*"80386"*) echo i386; return ;;
 		*"ARM,"*) echo armhf; return ;;
 		esac
+		# `file` ran and did not recognise the binary. Falling back to the build
+		# host here is how an arm64 payload ends up in an amd64 package: refuse
+		# instead, and let the caller name the architecture.
+		die "cannot tell the architecture of $1 (file says: ${desc:-nothing}) — pass --arch"
 	fi
+	# No `file` at all: the host is a weaker guess, and it is the only one left.
 	case "$(uname -m)" in
 	x86_64 | amd64) echo amd64 ;;
 	aarch64 | arm64) echo arm64 ;;
@@ -123,6 +128,19 @@ if [ -z "$VERSION" ]; then
 	# should ever appear there, so take the last word and validate it.
 	VERSION=$("$BINARY" --version 2>/dev/null | awk '{print $NF}')
 	[ -n "$VERSION" ] || die "cannot read a version from $BINARY — pass --version"
+else
+	# A release passes its tag. When the binary can run on this host (it cannot
+	# for a cross build), the two must agree, or the package would claim a
+	# version its payload does not report. A Debian revision on top of the
+	# upstream version (1.0.0+build1, 1.0.0~rc1, 1.0.0-1) is a legitimate
+	# repackaging, so it is allowed as long as the upstream part matches.
+	own=$("$BINARY" --version 2>/dev/null | awk '{print $NF}' || true)
+	if [ -n "$own" ]; then
+		case "$VERSION" in
+		"$own" | "$own"[+~-]*) ;;
+		*) die "$BINARY reports $own but the package would say $VERSION" ;;
+		esac
+	fi
 fi
 
 case "$VERSION" in
@@ -140,6 +158,12 @@ amd64 | arm64 | i386 | armhf | ppc64el | riscv64 | s390x) ;;
 esac
 
 if [ -z "$DEPENDS" ]; then
+	if ! command -v objdump >/dev/null 2>&1 && ! command -v readelf >/dev/null 2>&1; then
+		# Without a symbol reader, "no GLIBC_ symbols" is indistinguishable from
+		# "could not look", and the silent answer would be a package with no
+		# libc floor at all — installable everywhere, unstartable everywhere.
+		die "need objdump or readelf to derive the glibc floor — install binutils, or pass --depends"
+	fi
 	glibc=$(max_glibc "$BINARY")
 	# The floor comes from the symbol set the binary actually imports, so a
 	# build on an older release produces a package that says so instead of a
@@ -154,7 +178,31 @@ if [ -z "$DEPENDS" ]; then
 	fi
 fi
 
+# These two are substituted into the control file with sed, where & expands to
+# the match, | ends the expression and \ escapes the next character. A maintainer
+# string is not a shell, so reject the characters that would turn a field into
+# two — or into something else.
+for field in "$MAINTAINER" "$DEPENDS"; do
+	case "$field" in
+	*"&"* | *"|"* | *"\\"* | *"
+"*) die "a control field cannot hold &, |, \\ or a newline: $field" ;;
+	esac
+done
+
 # --- staging -----------------------------------------------------------------
+
+# dpkg-deb clamps the payload timestamps to SOURCE_DATE_EPOCH, so two builds of
+# one commit are byte-identical — and a released .deb can be rebuilt from its
+# tag. Default it to the commit's own time so nobody has to remember.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+	if epoch=$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null) && [ -n "$epoch" ]; then
+		SOURCE_DATE_EPOCH=$epoch
+		export SOURCE_DATE_EPOCH
+	else
+		# Say it rather than quietly producing a package that cannot be rebuilt.
+		note "no git history here: SOURCE_DATE_EPOCH is unset, so this .deb is not reproducible"
+	fi
+fi
 
 work=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$work"' EXIT INT TERM HUP
@@ -181,8 +229,9 @@ cp "$SCRIPT_DIR/copyright" "$docdir/copyright"
 chmod 0644 "$docdir/copyright"
 
 # Installed-Size is in KiB, rounded up, and covers /usr only: DEBIAN is
-# package metadata, not payload.
-installed_size=$(du -sk "$pkgdir/usr" | cut -f1)
+# package metadata, not payload. --apparent-size so the number describes the
+# files rather than the block size of whoever's filesystem this ran on.
+installed_size=$(du -sk --apparent-size "$pkgdir/usr" | cut -f1)
 
 sed \
 	-e "s|@VERSION@|$VERSION|g" \
@@ -192,10 +241,6 @@ sed \
 	-e "s|@DEPENDS@|$DEPENDS|g" \
 	"$SCRIPT_DIR/control.in" >"$pkgdir/DEBIAN/control"
 chmod 0644 "$pkgdir/DEBIAN/control"
-if [ -z "$DEPENDS" ]; then
-	grep -v '^Depends:[[:space:]]*$' "$pkgdir/DEBIAN/control" >"$pkgdir/DEBIAN/control.tmp"
-	mv "$pkgdir/DEBIAN/control.tmp" "$pkgdir/DEBIAN/control"
-fi
 
 if command -v md5sum >/dev/null 2>&1; then
 	(cd "$pkgdir" && find usr -type f -print | sort | while IFS= read -r f; do md5sum "$f"; done) >"$pkgdir/DEBIAN/md5sums"

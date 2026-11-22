@@ -125,16 +125,33 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || 'gcc' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Resolve the version
+        # The tag when this is a release push; the crate version for a manual
+        # run. Passed to the packager so it never has to execute a cross-built
+        # binary, which the amd64 runner cannot do for arm64.
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          fi
+          if [ -z "$v" ]; then
+            # An empty --version would send the packager back to executing the
+            # binary, which fails on the arm64 job for an unrelated reason.
+            echo "::error::could not resolve a version from ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
       - name: Stage one binary, two deliveries
         # The .deb payload and the bare `mask-<target>` are the same file, so the
         # two install routes cannot drift — and a checksum in SHA256SUMS covers
-        # both.
+        # both. Nothing runs here: an aarch64 binary cannot execute on this host.
         run: |
           set -euo pipefail
-          built="target/${{ matrix.target }}/release/mask"
-          mkdir -p dist
-          cp "$built" "dist/mask-${{ matrix.target }}"
-          "$built" --version
+          install -D -m 0755 "target/${{ matrix.target }}/release/mask" "dist/mask-${{ matrix.target }}"
 
       - name: Package
         # build-deb.sh derives Architecture from the ELF header and Depends from
@@ -144,6 +161,7 @@ jobs:
           sh packaging/debian/build-deb.sh \
             --binary "target/${{ matrix.target }}/release/mask" \
             --arch "${{ matrix.arch }}" \
+            --version "${{ steps.version.outputs.value }}" \
             --output dist
           dpkg-deb --info dist/mask_*.deb
 

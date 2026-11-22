@@ -20,6 +20,9 @@ Windows, macOS and Linux.
   versioned symbols the binary imports and declares `libc6 (>= …)` from that, so
   an older distribution refuses the package instead of installing a binary that
   cannot start. Releases build it inside `debian:12` for the same reason
+- The `.deb` is reproducible: `dpkg-deb` clamps the payload timestamps to
+  `SOURCE_DATE_EPOCH`, and the build defaults that to the commit's own time, so a
+  released package can be rebuilt byte-for-byte from its tag
 - `curl -fsSL https://mask.branchead.com/install.sh | sh` installs the binary for
   the current machine after checking it against the release's `SHA256SUMS`, and
   fails closed when the sums are missing or do not match (`--no-verify` is the

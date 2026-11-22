@@ -183,6 +183,45 @@ else
 			printf '  skip  groff not installed, man page not rendered\n'
 		fi
 
+		# Two builds of one commit must be byte-identical, or a released package
+		# cannot be rebuilt from its tag.
+		if sh "$ROOT/packaging/debian/build-deb.sh" --binary "$BINARY" --output "$WORK/deb2" >/dev/null 2>&1 &&
+			cmp -s "$deb" "$WORK/deb2/$(basename "$deb")"; then
+			pass "two builds of the same commit are byte-identical"
+		else
+			fail "the .deb is not reproducible across two builds"
+		fi
+
+		# sed substitutes these into the control file: a control field holding a
+		# separator would silently become two fields. Check that the refusal comes
+		# from the field check, not from sed failing on its own.
+		if sh "$ROOT/packaging/debian/build-deb.sh" --binary "$BINARY" --depends 'libc6 | ca-certificates' --output "$WORK/deb3" >"$WORK/depends.log" 2>&1; then
+			fail "build-deb accepted a --depends value that breaks the control file"
+		elif grep -q 'control field' "$WORK/depends.log"; then
+			pass "a malformed --depends is refused by the control-field check"
+		else
+			fail "the refusal did not come from the control-field check: $(tail -1 "$WORK/depends.log")"
+		fi
+
+		# The embedded-newline arm of that check: the one a shell pattern is most
+		# likely to get wrong.
+		if sh "$ROOT/packaging/debian/build-deb.sh" --binary "$BINARY" \
+			--maintainer "$(printf 'A\nB <a@b>')" --output "$WORK/deb4" >"$WORK/maintainer.log" 2>&1; then
+			fail "build-deb accepted a Maintainer holding a newline"
+		elif grep -q 'control field' "$WORK/maintainer.log"; then
+			pass "a Maintainer with a newline is refused"
+		else
+			fail "the newline refusal did not come from the control-field check: $(tail -1 "$WORK/maintainer.log")"
+		fi
+
+		# A Debian revision on top of the crate version is a normal repackaging,
+		# not a mismatched version.
+		if sh "$ROOT/packaging/debian/build-deb.sh" --binary "$BINARY" --version "$version+build1" --output "$WORK/deb5" >/dev/null 2>&1; then
+			pass "a +build1 revision of the crate version is packaged"
+		else
+			fail "a legitimate +build1 revision was refused"
+		fi
+
 		# A real dpkg install is the only way to know the metadata is
 		# satisfiable on this system. It is opt-in because it changes the host:
 		# on a developer's machine `mask` may already be installed, and the
@@ -237,10 +276,20 @@ write_mirror() { # binary
 # A mirror needs a stable, unpacked binary; the release build is exactly that.
 write_mirror "$BINARY"
 
-if sh "$installer" --base-url "file://$mirror" --version "$version" --target "$target" --prefix "$prefix" >"$WORK/install.log" 2>&1; then
+# HOME is empty on purpose: installing must not write a config, a key or a
+# cache there. That promise is the reason the installer exists in this shape.
+mkdir -p "$WORK/home"
+
+if HOME="$WORK/home" sh "$installer" --base-url "file://$mirror" --version "$version" --target "$target" --prefix "$prefix" >"$WORK/install.log" 2>&1; then
 	pass "fresh install exits 0"
 else
 	fail "fresh install failed: $(tail -3 "$WORK/install.log")"
+fi
+
+if [ -z "$(ls -A "$WORK/home")" ]; then
+	pass "installer wrote nothing in HOME (no config, no cache)"
+else
+	fail "installer wrote into HOME: $(ls -A "$WORK/home" | tr '\n' ' ')"
 fi
 
 if [ -x "$installed" ] && [ "$("$installed" --version 2>/dev/null)" = "mask $version" ]; then
@@ -330,6 +379,66 @@ else
 	fi
 fi
 
+# Credentials in a URL are how a loopback prefix hides a remote host: curl reads
+# http://127.0.0.1:9@evil.example/x as user 127.0.0.1, host evil.example.
+if sh "$installer" --base-url 'http://127.0.0.1:9@evil.invalid/releases' --version "$version" --target "$target" --prefix "$prefix" >"$WORK/userinfo.log" 2>&1; then
+	fail "install accepted a URL with credentials in it"
+else
+	if grep -q 'credentials' "$WORK/userinfo.log"; then
+		pass "a URL with credentials is refused before anything is fetched"
+	else
+		fail "the credentials refusal is missing: $(tail -2 "$WORK/userinfo.log")"
+	fi
+fi
+
+# A mirror on this machine is the one place plain http is allowed, and it has to
+# keep working with a port — a "http://localhost/*" pattern never matched
+# "localhost:8080". curl is stubbed to fail, so the classification is exercised
+# without opening a socket: this script stays offline.
+mkdir -p "$WORK/failing-curl"
+printf '#!/bin/sh\nexit 1\n' >"$WORK/failing-curl/curl"
+chmod +x "$WORK/failing-curl/curl"
+
+for loopback in "http://127.0.0.1:9/releases" "http://localhost:9/releases" "http://LOCALHOST:9/releases"; do
+	if PATH="$WORK/failing-curl:$PATH" sh "$installer" --base-url "$loopback" --version "$version" --target "$target" --prefix "$prefix" >"$WORK/loopback.log" 2>&1; then
+		fail "$loopback: install reached a server that is not there"
+	elif grep -q 'refusing plain http' "$WORK/loopback.log"; then
+		fail "$loopback was refused as a remote host: $(tail -1 "$WORK/loopback.log")"
+	else
+		pass "$loopback is attempted, not refused as remote"
+	fi
+done
+
+# A name that merely starts with a bracketed address is not that address.
+for fooling in "http://[::1]evil.example/releases" "http://127.0.0.1.evil.example/releases"; do
+	if PATH="$WORK/failing-curl:$PATH" sh "$installer" --base-url "$fooling" --version "$version" --target "$target" --prefix "$prefix" >"$WORK/fooling.log" 2>&1; then
+		fail "$fooling: install accepted a remote host dressed as loopback"
+	elif grep -q 'refusing plain http' "$WORK/fooling.log"; then
+		pass "$fooling is refused as a remote host"
+	else
+		fail "$fooling was not refused: $(tail -1 "$WORK/fooling.log")"
+	fi
+done
+
+# A token in an https mirror URL is a normal way to reach a private mirror, and
+# it must never be echoed: these messages get pasted into issues.
+if PATH="$WORK/failing-curl:$PATH" sh "$installer" --base-url 'https://user:s3cr3t@mirror.invalid/m' --version "$version" --target "$target" --prefix "$prefix" >"$WORK/https-auth.log" 2>&1; then
+	fail "install reached a mirror that is not there"
+elif grep -q 'credentials' "$WORK/https-auth.log"; then
+	fail "an https mirror with credentials was refused: $(tail -1 "$WORK/https-auth.log")"
+elif grep -q 's3cr3t' "$WORK/https-auth.log"; then
+	fail "the mirror token appeared in the installer's output"
+else
+	pass "an https mirror with credentials is attempted, and the token is not printed"
+fi
+
+if sh "$installer" --dry-run --base-url 'https://user:s3cr3t@mirror.invalid/m' >"$WORK/dry-auth.log" 2>&1 &&
+	! grep -q 's3cr3t' "$WORK/dry-auth.log"; then
+	pass "--dry-run prints the URL without the token"
+else
+	fail "--dry-run printed the token, or failed"
+fi
+
 # --dry-run must not create or touch anything.
 dry="$WORK/dry"
 if sh "$installer" --base-url "file://$mirror" --version "$version" --target "$target" --prefix "$dry" --dry-run >"$WORK/dry.log" 2>&1; then
@@ -368,6 +477,18 @@ if sh "$installer" --help >/dev/null 2>&1; then
 	pass "--help exits 0"
 else
 	fail "--help exits non-zero"
+fi
+
+# --dry-run is what a cautious reader runs first, so it must not delete anything
+# — including on the one path that removes files.
+if HOME="$WORK/home" sh "$installer" --uninstall --dry-run --prefix "$prefix" >"$WORK/uninstall-dry.log" 2>&1; then
+	if [ -e "$installed" ]; then
+		pass "--uninstall --dry-run removes nothing"
+	else
+		fail "--uninstall --dry-run deleted the binary"
+	fi
+else
+	fail "--uninstall --dry-run failed"
 fi
 
 # Uninstall removes the binary and leaves the operator's files alone.

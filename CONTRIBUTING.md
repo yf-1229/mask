@@ -75,7 +75,8 @@ scripts/install-test.sh                             # both doors, against a loca
   symbols the binary imports, so the metadata cannot drift from the payload. The
   package ships the binary, the man page and the documents: **no service, no
   `/etc` configuration** — starting the gateway is a human's act, and the config
-  holds the upstream key
+  holds the upstream key. Two builds of one commit are byte-identical
+  (`SOURCE_DATE_EPOCH` defaults to the commit time), which the test asserts
 - `scripts/install.sh` is what `https://mask.branchead.com/install.sh` serves.
   The site copy is staged from this file at deploy time (`.github/workflows/deploy-site.yml`),
   so there is one script, not two. It must stay POSIX `sh`, verify against
