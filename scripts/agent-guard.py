@@ -75,9 +75,10 @@ HARD_RULES: list[tuple[re.Pattern[str], str]] = [
         "live pseudonym table. Ask the operator to run `mask serve`.",
     ),
     (
-        re.compile(r"\bmask\b[^\n]*\b(chat|status)\b", re.IGNORECASE),
-        "that talks to the operator's running gateway (their key, their session). "
-        "`mask check \"…\"` is local and fine; ask the operator for the rest.",
+        re.compile(r"\bmask\b[^\n]*\b(chat|status|dict)\b", re.IGNORECASE),
+        "that reaches the operator's gateway or their dictionary (their key, their "
+        "session, their terms). `mask check \"…\"` is local and fine; ask the operator "
+        "for the rest.",
     ),
     (
         re.compile(r"\b(pkill|killall)\b[^\n]*\bmask\b|\bkill\b[^\n]*\bmask\b", re.IGNORECASE),
@@ -126,7 +127,8 @@ CONNECT_RULES: list[tuple[re.Pattern[str], str]] = [
 
 CONTRACT = (
     "Repository contract (AGENTS.md): the operator's running `mask serve`, its "
-    "mask.toml / ~/.config/mask/mask.toml, its dictionary.tsv and *.maskbox files, and "
+    "mask.toml / ~/.config/mask/mask.toml, its dictionary.tsv and *.maskbox files "
+    "(including `mask dict`), and "
     "its /admin/* endpoints are off limits — do not start, stop, probe, read or export "
     "from them. Start the gateway only when the human explicitly asks. Work on the code "
     "instead: cargo fmt / clippy / test starts its own loopback gateways with mock "
@@ -262,6 +264,8 @@ REFUSED = [
     "MASK_ALLOW_AGENT_HOST=1 mask serve",
     "mask serve --allow-agent-host",
     "mask --no-color chat hi",
+    "mask dict add 山田太郎",
+    "mask dict list",
     "pkill -f mask",
     "killall mask",
     "curl -s http://127.0.0.1:8080/status",

@@ -41,10 +41,11 @@ pub enum Count {
     HandoffExpired,
     HandoffConsumed,
     AdminGateRefusals,
+    DictionaryReloads,
 }
 
 impl Count {
-    pub const ALL: [Count; 17] = [
+    pub const ALL: [Count; 18] = [
         Count::RequestsTotal,
         Count::RequestsBlocked,
         Count::EntitiesMasked,
@@ -62,6 +63,7 @@ impl Count {
         Count::HandoffExpired,
         Count::HandoffConsumed,
         Count::AdminGateRefusals,
+        Count::DictionaryReloads,
     ];
 
     pub fn key(self) -> &'static str {
@@ -83,6 +85,7 @@ impl Count {
             Count::HandoffExpired => "handoff_expired",
             Count::HandoffConsumed => "handoff_consumed",
             Count::AdminGateRefusals => "admin_gate_refusals",
+            Count::DictionaryReloads => "dictionary_reloads",
         }
     }
 
@@ -98,7 +101,7 @@ impl Count {
 #[derive(Debug)]
 pub struct Indicators {
     started_at: Instant,
-    values: [AtomicU64; 17],
+    values: [AtomicU64; 18],
 }
 
 impl Default for Indicators {

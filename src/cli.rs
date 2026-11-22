@@ -7,6 +7,7 @@
 //! mask check '...'    # dry-run: what would be masked, no network, no LLM
 //! mask chat '...'     # one prompt, through the gateway, restored answer
 //! mask status         # reliability indicator panel of a running gateway
+//! mask dict add ...   # register a term; a running gateway picks it up live
 //! mask serve          # start the gateway
 //! ```
 //!
@@ -15,14 +16,14 @@
 //! is detected (detection is the tool working, not failing).
 
 use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
-use crate::detect::dictionary::UserDictionary;
+use crate::detect::dictionary::{append_or_update, AddOutcome, ParseReport, UserDictionary};
 use crate::gateway::config::GatewayConfig;
 use crate::session::Session;
 use crate::types::{DetectionResult, EntityType};
@@ -93,6 +94,11 @@ enum Command {
         url: Option<String>,
         #[arg(long, default_value_t = 120.0)]
         timeout: f64,
+    },
+    /// register a term, list terms, or validate the dictionary file
+    Dict {
+        #[command(subcommand)]
+        action: DictAction,
     },
     /// reliability indicator panel of the running gateway
     Status {
@@ -168,6 +174,13 @@ async fn run(cli: Cli) -> Result<i32> {
     let config = GatewayConfig::load(cli.config.as_deref())?;
     match cli.command {
         Command::Check { text } => cmd_check(&text, &config, colorize),
+        Command::Dict { action } => match action {
+            DictAction::Add { term, kind, file } => {
+                cmd_dict_add(&term, &kind, file.as_deref(), &config, colorize)
+            }
+            DictAction::List { file } => cmd_dict_list(file.as_deref(), &config, colorize),
+            DictAction::Check { file } => cmd_dict_check(file.as_deref(), &config, colorize),
+        },
         Command::Chat {
             text,
             model,
@@ -215,6 +228,33 @@ fn init_tracing(level: &str) {
         .with_env_filter(filter)
         .with_target(false)
         .try_init();
+}
+
+#[derive(Subcommand, Debug)]
+enum DictAction {
+    /// add a term (or correct its type); a running gateway merges it live
+    Add {
+        /// the term to register
+        term: String,
+        /// entity type: person, org, location, address, phone, email, account
+        #[arg(short = 't', long = "type", default_value = "person")]
+        kind: String,
+        /// dictionary file (default: [mask].dictionary, else ./dictionary.tsv)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// print every registered term
+    List {
+        /// dictionary file (default: [mask].dictionary, else ./dictionary.tsv)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// validate the file; reports counts and line numbers, never values
+    Check {
+        /// dictionary file (default: [mask].dictionary, else ./dictionary.tsv)
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 // --- session / config helpers ------------------------------------------------
@@ -332,10 +372,24 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
     ));
 
     let terms = get_u64(snapshot, "posture", "dictionary_terms");
+    let reloads = get_u64(snapshot, "counts", "dictionary_reloads");
+    let live = if reloads > 0 {
+        paint(
+            &format!(
+                "  ({reloads} live reload{})",
+                if reloads == 1 { "" } else { "s" }
+            ),
+            DIM,
+            colorize,
+        )
+    } else {
+        String::new()
+    };
     lines.push(format!(
-        "{} dictionary      {} terms",
+        "{} dictionary      {} terms{}",
         light(true, colorize),
-        terms
+        terms,
+        live
     ));
 
     let token_set = get_bool(snapshot, "posture", "gateway_token");
@@ -356,8 +410,8 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
         "{} admin channel  {}",
         light(admin == "human", colorize),
         match admin {
-            "human" => "human (export/import need the terminal token)",
-            "closed" => "closed — no operator terminal (export/import refused)",
+            "human" => "human (export/import/reload need the terminal token)",
+            "closed" => "closed — no operator terminal (admin refused; dictionary reload is local)",
             _ => "off (admin_require_human = false)",
         }
     ));
@@ -434,6 +488,45 @@ pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> 
     lines.join("\n")
 }
 
+/// Validation report for `mask dict check` (pure). Counts and line numbers
+/// only: the file's contents never enter the output, so it can be pasted into
+/// a bug report.
+pub fn render_dict_check(path: &Path, report: &ParseReport, colorize: bool) -> String {
+    let ok = report.skipped == 0;
+    let mut lines = vec![
+        format!(
+            "{} dictionary      {}  ({} term{})",
+            light(ok, colorize),
+            paint(&path.display().to_string(), DIM, colorize),
+            report.terms,
+            if report.terms == 1 { "" } else { "s" }
+        ),
+        format!("{} skipped lines   {}", light(ok, colorize), report.skipped),
+    ];
+    if !report.skipped_lines.is_empty() {
+        let shown: Vec<String> = report
+            .skipped_lines
+            .iter()
+            .take(10)
+            .map(usize::to_string)
+            .collect();
+        let more = if report.skipped_lines.len() > 10 {
+            format!(" … {} more", report.skipped_lines.len() - 10)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "  {}",
+            paint(
+                &format!("line {}{more}", shown.join(", ")),
+                YELLOW,
+                colorize
+            )
+        ));
+    }
+    lines.join("\n")
+}
+
 // --- subcommands -------------------------------------------------------------
 
 fn read_prompt(args: &[String]) -> Option<String> {
@@ -461,6 +554,138 @@ fn cmd_check(args: &[String], config: &GatewayConfig, colorize: bool) -> Result<
     println!("{masked}");
     eprintln!("{}", paint("[mask check]", DIM, colorize));
     eprintln!("{}", render_check(&masked, &result, colorize));
+    Ok(0)
+}
+
+/// Where `mask dict ...` reads and writes: `--file`, then `[mask].dictionary`,
+/// then the working-directory convention `./dictionary.tsv`.
+fn dictionary_path(config: &GatewayConfig, file: Option<&Path>) -> PathBuf {
+    file.map(Path::to_path_buf)
+        .or_else(|| config.dictionary_path.clone())
+        .unwrap_or_else(|| PathBuf::from("dictionary.tsv"))
+}
+
+fn cmd_dict_add(
+    term: &str,
+    kind: &str,
+    file: Option<&Path>,
+    config: &GatewayConfig,
+    colorize: bool,
+) -> Result<i32> {
+    let Some(kind) = EntityType::from_name(kind) else {
+        let names: Vec<&str> = EntityType::ALL.iter().map(|kind| kind.as_str()).collect();
+        eprintln!(
+            "error: unknown type {kind:?}; expected one of {}",
+            names.join(", ")
+        );
+        return Ok(2);
+    };
+    let path = dictionary_path(config, file);
+    let outcome = match append_or_update(&path, term, kind) {
+        Ok(outcome) => outcome,
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            eprintln!("error: {error}");
+            return Ok(2);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("cannot write {}", path.display()))
+        }
+    };
+    let terms = UserDictionary::load(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?
+        .size();
+    let verb = match outcome {
+        AddOutcome::Added => format!("added {kind}"),
+        AddOutcome::Updated { from: Some(from) } => format!("updated {from} -> {kind}"),
+        AddOutcome::Updated { from: None } => format!("repaired -> {kind}"),
+        AddOutcome::Unchanged => format!("already registered as {kind}"),
+    };
+    println!(
+        "{verb} {}  {}  ({} term{})",
+        term.trim(),
+        paint(&path.display().to_string(), DIM, colorize),
+        terms,
+        if terms == 1 { "" } else { "s" }
+    );
+    match config.dictionary_path.as_deref() {
+        None => eprintln!(
+            "note: mask.toml has no [mask].dictionary — add `dictionary = \"{}\"` so the gateway loads this file",
+            path.display()
+        ),
+        Some(configured) if !same_file(configured, &path) => eprintln!(
+            "note: the gateway watches {}; this edit is not live. Pass --file to match",
+            configured.display()
+        ),
+        Some(_) => eprintln!(
+            "{}",
+            paint(
+                "[mask] a running gateway merges additions on the next request; removals take effect on restart",
+                DIM,
+                colorize
+            )
+        ),
+    }
+    Ok(0)
+}
+
+/// Same file, even when one path is relative and the other is not.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn cmd_dict_list(file: Option<&Path>, config: &GatewayConfig, colorize: bool) -> Result<i32> {
+    let path = dictionary_path(config, file);
+    let dictionary = UserDictionary::load(&path)
+        .with_context(|| format!("cannot load dictionary {}", path.display()))?;
+    if dictionary.is_empty() {
+        eprintln!("(no terms in {})", path.display());
+        return Ok(0);
+    }
+    let mut entries: Vec<(&str, EntityType)> = dictionary.entries().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (term, kind) in entries {
+        println!("{term}\t{kind}");
+    }
+    eprintln!(
+        "{}",
+        paint(
+            &format!("[mask] {} term(s) in {}", dictionary.size(), path.display()),
+            DIM,
+            colorize
+        )
+    );
+    Ok(0)
+}
+
+fn cmd_dict_check(file: Option<&Path>, config: &GatewayConfig, colorize: bool) -> Result<i32> {
+    let path = dictionary_path(config, file);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "error: dictionary {} not found (nothing registered yet)",
+                path.display()
+            );
+            return Ok(1);
+        }
+        Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
+    };
+    let (_, report) = UserDictionary::parse_report(&text);
+    println!("{}", render_dict_check(&path, &report, colorize));
+    if report.skipped > 0 {
+        eprintln!(
+            "{}",
+            paint(
+                "[mask] skipped lines would be ignored by the gateway; fix them or they never mask",
+                YELLOW,
+                colorize
+            )
+        );
+        return Ok(1);
+    }
     Ok(0)
 }
 

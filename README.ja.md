@@ -37,7 +37,7 @@ English README: [README.md](README.md) ／ 公式サイト: **https://mask.branc
 |---|---|---|
 | プロキシ (OpenAI互換) | OpenAI 系ハーネス/エージェント | `base URL = http://127.0.0.1:8080/v1` |
 | プロキシ (Anthropic互換) | Claude Code など | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=<gateway.token>` |
-| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask status` / `mask serve` |
+| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask status` / `mask dict` / `mask serve` |
 
 ### Anthropic 互換入口 (`/v1/messages`)
 
@@ -60,6 +60,9 @@ mask chat "山田太郎さんに連絡して"     # 1往復。応答は復元済
 mask check "090-1234-5678 です"       # 事前確認: 何がマスクされるか (ネット不要)
 mask status                           # 信頼性インジケータパネル
 mask status --json                    # /status の生スナップショット
+mask dict add 山田太郎                 # 用語を登録 (稼働中のゲートウェイが即座に拾う)
+mask dict list                        # 登録済みの用語 (用語<TAB>タイプ)
+mask dict check                       # ファイル検証 (件数と行番号のみ)
 mask serve                            # ゲートウェイ起動
 ```
 
@@ -67,6 +70,12 @@ mask serve                            # ゲートウェイ起動
   インジケータ (検出数・タイプ)。パイプで繋げます
 - `chat` は稼働中のゲートウェイに繋ぎ、応答本文を stdout へ。
   `X-Mask-*` ヘッダから信頼性フッタも表示
+- `dict add` は「取りこぼし → 登録」の一本道です。用語を検証し、コメントと
+  改行コードを保ったまま `dictionary.tsv` をアトミックに置き換えます。稼働中の
+  ゲートウェイは次のリクエストから追加分をマージし、**再起動も対応表のロストも
+  ありません**。
+  `dict check` は読み飛ばされた行を番号だけで報告するので、タイプミスが
+  再現率の静かな低下にならず、その場で失敗します
 - API キー Spoofing の心配なし: CLI は `gateway.token` を Bearer に使うだけ
 
 ## 信頼性インジケータ
@@ -224,14 +233,18 @@ Python 版の spaCy/ja_ginza パイプラインは、バイナリに同梱した
    カード番号。境界ガードを明示しているので `2019-04-01` のような日付が
    電話番号として拾われることはありません。
 2. **ユーザー辞書** — `dictionary.tsv` (`用語<TAB>タイプ`)。最長一致優先。
-   業務で重要な名前はここに入れます。
+   業務で重要な名前はここに入れます。`mask dict add 山田太郎` で追記でき、
+   稼働中のゲートウェイはファイルを読み直して追加分をマージします
+   (追加のみ。削除は再起動待ち — 再起動は対応表も消すため)。
 3. **組み込みの人名検出** — 約300語の姓辞書 + 敬称・機能語で止まる名前拡張。
    モデルファイル不要で起動は即時です。
 
 トレードオフも明記します: 統計的 NER モデルの方が未知の名前への再現率は高い。
 このツールが主張する再現率はカナリアコーパス (`tests/pipeline.rs`、
-`tests/gateway.rs`) で固定されており、取りこぼした名前は `dictionary.tsv` に
-入れるのが正解です (最高信頼の層で、同じスパンなら組み込み検出より優先)。
+`tests/gateway.rs`、`tests/dictionary.rs`) で固定されており、取りこぼした名前は
+`dictionary.tsv` に入れるのが正解です (最高信頼の層で、同じスパンなら組み込み
+検出より優先)。登録は 1 コマンドで済み、稼働中のゲートウェイも対応表を失わずに
+受け取ります。
 
 ## セットアップ
 
@@ -294,6 +307,7 @@ api_key = "sk-..."          # 環境変数 MASK_UPSTREAM_API_KEY でも可
 [mask]
 use_ner = true              # 組み込みの人名検出 (モデルダウンロードなし)
 dictionary = "dictionary.tsv" # 追加辞書 (TSV: 用語<TAB>タイプ)
+                             # 追加は稼働中にマージ、削除は再起動で反映
 
 [session]
 scope = "global"            # "global": 会話を通じて疑似名を安定させる
@@ -341,12 +355,14 @@ status_public = false        # /status インジケータの公開 (数字のみ
   PII を含みうるスキーマ (embeddings 等) を足す場合は注意。
 - base URL を変更できないクラウドサービス (ChatGPT web 等) は対象外。
 - 組み込みの人名検出は統計モデルではなく辞書ベースです。珍しい名前・
-  表記は `dictionary.tsv` への登録が必要です。
+  表記は `dictionary.tsv` への登録が必要です (`mask dict add`)。追加は
+  稼働中にマージされますが、削除・撤回は再起動まで反映されません
+  (リロードで再現率を下げられないようにするための規則です)。
 
 ## テスト
 
 ```sh
-cargo test          # 159 テスト
+cargo test          # 175 テスト
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```

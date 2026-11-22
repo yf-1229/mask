@@ -39,8 +39,9 @@ For a value the session has **detected**:
   ciphertext (argon2id + XSalsa20-Poly1305), expire, lock after repeated wrong
   passphrases, and are single-use
 - the mapping table does not leave the process **as a table** unless the
-  operator at the gateway's own terminal asks for it: `/admin/export` and
-  `/admin/import` require `x-mask-admin`, a token minted at startup and printed
+  operator at the gateway's own terminal asks for it: `/admin/export`,
+  `/admin/import` and `/admin/dictionary/reload` require `x-mask-admin`, a token
+  minted at startup and printed
   only to the controlling terminal (never to stdout, a log, or `/status`).
   Without a terminal there is no token, so the admin channel is closed rather
   than open. (A client of the proxy can still resolve *individual* pseudonyms by

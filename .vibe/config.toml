@@ -14,6 +14,7 @@ denylist = [
   "mask server",
   "mask chat",
   "mask status",
+  "mask dict",
   "pkill -f mask",
   "killall mask",
 ]

@@ -17,6 +17,7 @@
       "Bash(*/admin/import*)",
       "Bash(mask chat:*)",
       "Bash(mask status:*)",
+      "Bash(mask dict:*)",
       "Read(./mask.toml)",
       "Read(//**/mask.toml)",
       "Read(~/.config/mask/**)",

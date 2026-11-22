@@ -24,7 +24,9 @@ api_key = ""
 
 [mask]
 use_ner = true                   # 組み込みの人名検出 (モデルダウンロードなし)
-# dictionary = "dictionary.tsv"   # TSV: <term>\t<type>
+# dictionary = "dictionary.tsv"   # TSV: <term>\t<type>. `mask dict add` writes it;
+                                  # additions are merged while the gateway runs,
+                                  # removals apply on restart
 
 [session]
 scope = "global"   # "global" | "request"

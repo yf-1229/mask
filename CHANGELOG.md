@@ -43,6 +43,28 @@ Windows, macOS and Linux.
   through `.vibe/hooks.toml` (Vibe) and `.claude/settings.json` (Claude Code).
   Self-test: `sh scripts/agent-guard.sh --self-test`
 
+### Dictionary work without a restart
+
+- New `mask dict add <term> [--type person]`, `mask dict list`, `mask dict check`.
+  `add` validates the term, corrects a type in place, keeps comments and line
+  endings, and replaces `dictionary.tsv` atomically (temp file + rename).
+  `check` reports skipped lines by number only — no value ever appears in the
+  report — and exits non-zero so a typo cannot silently shrink recall
+- A running gateway re-reads `dictionary.tsv` on each request (one `stat`) and
+  merges the file into the live table. The merge is **additive**: additions
+  and type changes apply, removals wait for a restart. Reload therefore cannot
+  lower coverage mid-session, and registering a missed name no longer costs the
+  in-memory mapping table
+- New `POST /admin/dictionary/reload` for an explicit check, behind the same
+  four admin gates (loopback `Host`, gateway token, loopback client, operator
+  token). It answers with counts only: `added`, `updated`, `kept`, `terms`
+- `/status` gains the `dictionary_reloads` counter; `mask status` shows live
+  reloads next to the dictionary size when there are any
+- Tests: `tests/dictionary.rs` pins the file format, the additive merge (a file
+  that drops every term removes nothing), the live pickup across a real
+  request, deletion of the file not disabling detection, the admin endpoint,
+  and the CLI commands
+
 ### Native rewrite
 
 - The Python runtime is gone: `mask` is one self-contained executable

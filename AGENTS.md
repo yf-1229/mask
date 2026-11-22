@@ -23,8 +23,8 @@ itself (see [Guardrails](#guardrails-what-actually-stops-you)).
 |---|---|---|
 | 1 | Starting, stopping, restarting or reloading `mask serve`, or `kill`/`pkill`/`killall` on a `mask` process | The operator's instance holds their upstream key and their live pseudonym table. Killing it silently loses every mapping, and the next turn sends real values upstream unmasked. |
 | 2 | `mask serve --allow-agent-host`, `MASK_ALLOW_AGENT_HOST=1`, `MASK_AGENT_HOST_GUARD=0`, `MASK_ADMIN_REQUIRE_HUMAN=0` | These are the doors you are being asked not to walk through. Starting a gateway, or opening its admin channel, is a human action. |
-| 3 | Reading `mask.toml`, `~/.config/mask/mask.toml`, `dictionary.tsv`, `*.maskbox`, or any `.env` | They carry the upstream key, the human's own terms, and handoff envelopes. Reading them is a leak even if you only print the path. If you need to know a setting, read `mask.toml.example` or ask. |
-| 4 | Writing, moving, chmod-ing or deleting those files | Same. Config changes are the human's, made in their editor. |
+| 3 | Reading `mask.toml`, `~/.config/mask/mask.toml`, `dictionary.tsv` (including `mask dict list`/`check`), `*.maskbox`, or any `.env` | They carry the upstream key, the human's own terms, and handoff envelopes. Reading them is a leak even if you only print the path. If you need to know a setting, read `mask.toml.example` or ask. |
+| 4 | Writing, moving, chmod-ing or deleting those files (including `mask dict add`) | Same. Config changes are the human's, made in their editor or their shell. |
 | 5 | Calling `/admin/export` or `/admin/import` (or `curl`/`wget`/`nc`/`socat`/`http` against port 8080 at all), or guessing the `x-mask-admin` operator token | `/admin/export` hands out the live mapping table. The token exists only on the human's terminal by design. |
 | 6 | Port-scanning, `lsof -i :8080`, or probing to see "if the gateway is up" | The gateway being up is the human's business. Ask them. |
 | 7 | Weakening a guarantee in the data path: `leak_gate = "warn"`, widening `passthrough_allowlist`, disabling NER, removing the admin gate, `admin_allow_remote = true` | Each one is a deliberate trade-off a human made. Propose the change; do not slip it in. |
@@ -121,7 +121,7 @@ loosen the guard deliberately. Never present a blocked action as done.
 
 - **触ってはいけない**: 稼働中の `mask serve`（起動・停止・再起動）、
   `mask.toml` / `~/.config/mask/mask.toml` / `dictionary.tsv` / `*.maskbox` /
-  `.env` の読み書き、`/admin/export`・`/admin/import`（および 8080 番への
+  `.env` の読み書き (`mask dict` も同様)、`/admin/export`・`/admin/import`（および 8080 番への
   接続・スキャン）、`leak_gate` や `passthrough_allowlist` など保証を緩める変更、
   それらを検証しているテストの削除、`git push` / `cargo publish` / デプロイ。
 - **してよい**: ソースの編集、`cargo fmt` / `clippy` / `test`（自前のモック上流で
