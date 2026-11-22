@@ -42,6 +42,11 @@ Windows, macOS and Linux.
   agents, and `scripts/agent-guard.sh` enforces it before a command runs, wired
   through `.vibe/hooks.toml` (Vibe) and `.claude/settings.json` (Claude Code).
   Self-test: `sh scripts/agent-guard.sh --self-test`
+- The guard now judges a command by its shape: `mask` is matched as an
+  executable in command position, not as a substring of the line. A checkout
+  named `mask` followed by `git status` is repo work, not `mask status`, while
+  `~/.local/bin/mask status` and `sh -c "mask serve"` are still refused. The
+  self-test grows to 47 cases and runs in CI
 
 ### Native rewrite
 
