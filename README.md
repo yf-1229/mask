@@ -173,7 +173,7 @@ when it is overridden:
 | `mask serve` refuses an agent's shell | An agent standing up an instance with your credentials: `VIBE_SESSION`, `CLAUDECODE`, `CODEX_SANDBOX` and friends are detected; `--allow-agent-host` is the explicit override |
 | Operator token on `/admin/*` | Any local process (agent, script, another user's shell) pulling the mapping table: the token is printed on the gateway's terminal only, and is absent when there is no terminal |
 | Loopback `Host` check | A DNS-rebinding page addressing the admin channel as `evil.example` (the name is parsed as an address, and a missing `Host` is refused too) |
-| Repo contract (`AGENTS.md`) + `scripts/agent-guard.sh` | An agent working in this checkout running `mask serve`, `curl :8080`, `cat mask.toml`, or `/admin/export` — denied before the command runs (Vibe and Claude Code hooks) |
+| Repo contract (`AGENTS.md`) + `scripts/agent-guard.sh` | An agent working in this checkout spending your key or session from a shell: `mask serve`, `mask chat`, `mask status`, any connection to the gateway port, `cat mask.toml`, `/admin/export` — denied before the command runs (Vibe and Claude Code hooks). The client relationship stays open where it belongs: in the harness's base-URL setting |
 
 Posture is visible without opening anything: `/status` reports
 `posture.admin_channel` (`human` / `closed` / `off`), `posture.agent_host_guard`,
@@ -248,11 +248,21 @@ x86_64/aarch64, Windows x86_64). Or build it yourself — one command, one file:
 
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
-cargo build --release          # target/release/mask(.exe)
-cp mask.toml.example mask.toml
-# edit mask.toml: upstream.base_url / upstream.api_key
-./target/release/mask serve
+cargo build --release                    # target/release/mask(.exe)
+
+# The config holds the upstream key, so it lives outside the checkout — that
+# is where coding agents run. mask.toml.example says the same at the top.
+mkdir -p ~/.config/mask
+cp mask.toml.example ~/.config/mask/mask.toml
+chmod 600 ~/.config/mask/mask.toml
+$EDITOR ~/.config/mask/mask.toml         # upstream.base_url / upstream.api_key
+./target/release/mask serve              # from your own terminal
 ```
+
+Resolution order, first match wins: `--config <path>`, `$MASK_CONFIG`,
+`$XDG_CONFIG_HOME/mask/mask.toml` (`~/.config/mask/mask.toml` by default), then
+`./mask.toml`. A checkout-local `mask.toml` still works — it is gitignored — but
+it puts the key inside the tree an agent works in.
 
 Requires the [Rust toolchain](https://rustup.rs) (1.82+). Nothing else: TLS is
 rustls with bundled roots, crypto is pure Rust, and the release profile is

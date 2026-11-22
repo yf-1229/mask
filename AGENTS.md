@@ -29,7 +29,7 @@ itself (see [Guardrails](#guardrails-what-actually-stops-you)).
 | 6 | Port-scanning, `lsof -i :8080`, or probing to see "if the gateway is up" | The gateway being up is the human's business. Ask them. |
 | 7 | Weakening a guarantee in the data path: `leak_gate = "warn"`, widening `passthrough_allowlist`, disabling NER, removing the admin gate, `admin_allow_remote = true` | Each one is a deliberate trade-off a human made. Propose the change; do not slip it in. |
 | 8 | Deleting or loosening the tests that pin those guarantees (`tests/guard.rs`, the canary suite, `tests/leak*`, `tests/sharing.rs` lockout cases) | A test that stops asserting a guarantee reads, later, as a guarantee that never existed. |
-| 9 | Publishing: `git push`, `cargo publish`, `wrangler deploy`, Docker pushes, publishing releases | The human publishes. You commit only when asked. |
+| 9 | Publishing: `git push`, `cargo publish`, `wrangler deploy`, Docker pushes, publishing releases | The human publishes. You only have to commit|
 
 If a task genuinely requires one of these — "why does `/admin/export` fail for
 me?" — do the part that does not need the secret (read the handler, write a test
@@ -51,14 +51,19 @@ with a synthetic token) and ask the human for the rest.
 
 ## The side of the line that is fine
 
-An agent is a first-class *client* of `mask`: connecting a harness to a gateway
-a human started (`ANTHROPIC_BASE_URL=http://127.0.0.1:8080`) is the point of the
-project. What is off limits is the *operator* side — starting the process,
-reading the secrets, exporting the table, changing the posture.
+An agent is a first-class *client* of `mask`, and that client relationship lives
+in its harness configuration: point `ANTHROPIC_BASE_URL` (or an OpenAI-style
+base URL) at the gateway a human started and the traffic flows through it
+without the agent touching the process. What is off limits is the *operator*
+side — starting the process, reading the secrets, exporting the table, changing
+the posture — and the shell route to the running instance: from a shell in this
+checkout, `mask chat`, `mask status` and any connection to the gateway port are
+refused, because a request an agent composes by hand spends the operator's key
+and rewrites their session. Ask the human to run those.
 
 ```
 agent may:  edit src/, add tests, run cargo test, run `mask check "…"` (no network)
-agent may:  talk to a gateway the human started, as an ordinary API client
+agent may:  reach the gateway through its own harness base URL — a setting, not a command
 agent must: stop before serve/kill/export/read-secrets/posture-changes, and ask
 ```
 
@@ -84,7 +89,10 @@ each one fails closed:
 2. **Repository guards (this checkout).**
    - `.vibe/hooks.toml` → `scripts/agent-guard.sh`: a `pre_tool` hook in Vibe (and
      Claude Code) that denies the commands and paths in the table above, before
-     they run.
+     they run — plus `mask chat` / `mask status` and any connection to the
+     gateway port, which is the shell route to the operator's running instance.
+     It matches `mask` as an executable in command position, so working in a
+     checkout named `mask` is not mistaken for running the CLI.
    - `.vibe/config.toml` and `.claude/settings.json`: deny lists for the same
      paths and for `mask serve`, so the quiet paths are closed too.
 3. **Layout.**
@@ -125,8 +133,9 @@ loosen the guard deliberately. Never present a blocked action as done.
   接続・スキャン）、`leak_gate` や `passthrough_allowlist` など保証を緩める変更、
   それらを検証しているテストの削除、`git push` / `cargo publish` / デプロイ。
 - **してよい**: ソースの編集、`cargo fmt` / `clippy` / `test`（自前のモック上流で
-  完結します）、`mask check`（ネットワークなし）、人間が起動したゲートウェイへの
-  通常の API クライアントとしての接続。
+  完結します）、`mask check`（ネットワークなし）、自分の harness の base URL
+  設定としてゲートウェイへ向けること（シェルからの `mask chat` / `mask status` /
+  8080 番への接続はフックが拒否します）。
 - **迷ったら**: 実行せず、人間に「これは稼働中のインスタンスに触りますが、
   実行してよいですか」と確認する。ガードで止められた場合は、どのガードに
   止められたかをそのまま報告する（迂回しない）。
