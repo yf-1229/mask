@@ -369,16 +369,16 @@ fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     }
     // A dictionary the operator made 0600 stays 0600 across a rewrite; a new
     // one is created 0600 on Unix from the start (it holds real names).
-    match std::fs::metadata(path) {
-        Ok(metadata) => {
-            let _ = std::fs::set_permissions(&temp, metadata.permissions());
-        }
-        Err(_) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
-            }
+    // `if let … else` rather than `match`: the `else` branch only has a body on
+    // Unix, so on Windows the match form is a single-arm `match` and clippy
+    // rejects it under `-D warnings`. The behaviour is unchanged either way.
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&temp, metadata.permissions());
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
         }
     }
     std::fs::rename(&temp, path)
