@@ -7,6 +7,37 @@ Notable changes to `mask`. The guarantee is stable; the surface is versioned.
 First public release. The Rust rewrite ships as a single native binary for
 Windows, macOS and Linux.
 
+### Install without a toolchain
+
+- A Debian package, `mask_<version>_<arch>.deb` (`amd64`, `arm64`), built by
+  `packaging/debian/build-deb.sh` and attached to every release:
+  `sudo apt install ./mask_amd64.deb`. It ships the binary, `man mask` and
+  `/usr/share/doc/mask/`, and deliberately ships **no service and no `/etc`
+  configuration** — starting the gateway stays a human's act, done from a
+  terminal the operator token can be printed to, and the config holds the
+  upstream key, so it stays in `~/.config/mask/mask.toml` at mode 600
+- The package's `Depends` is derived, not asserted: `build-deb.sh` reads the
+  versioned symbols the binary imports and declares `libc6 (>= …)` from that, so
+  an older distribution refuses the package instead of installing a binary that
+  cannot start. Releases build it inside `debian:12` for the same reason
+- The `.deb` is reproducible: `dpkg-deb` clamps the payload timestamps to
+  `SOURCE_DATE_EPOCH`, and the build defaults that to the commit's own time, so a
+  released package can be rebuilt byte-for-byte from its tag
+- `curl -fsSL https://mask.branchead.com/install.sh | sh` installs the binary for
+  the current machine after checking it against the release's `SHA256SUMS`, and
+  fails closed when the sums are missing or do not match (`--no-verify` is the
+  deliberate override, and it says so). It writes no config, starts nothing,
+  reads no key; `--uninstall` removes the binary and leaves your config and
+  dictionary alone. The script served from the site is the one in `scripts/`,
+  copied at deploy time, not a second copy
+- Every release publishes `SHA256SUMS` over all its assets, plus stable
+  `mask_amd64.deb` / `mask_arm64.deb` aliases so
+  `/releases/latest/download/…` survives a version bump
+- `scripts/install-test.sh` (run in CI) builds the package, checks its metadata
+  and payload against what the README promises, unpacks it, installs it with
+  `dpkg -i` on a throwaway runner, and drives `install.sh` against a `file://`
+  mirror — including the cases that must fail
+
 ### The gateway stays in a human's hands
 
 - `mask serve` refuses to start when the environment says an AI agent owns the

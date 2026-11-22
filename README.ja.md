@@ -256,15 +256,70 @@ Python 版の spaCy/ja_ginza パイプラインは、バイナリに同梱した
 
 ## セットアップ
 
-ビルド済みバイナリをリリースに添付しています (Linux x86_64/aarch64、
-macOS x86_64/aarch64、Windows x86_64)。自分でビルドするのも 1 コマンドです:
+入り口は3つ。上の2つはツールチェーン不要です。
+
+### Debian / Ubuntu — ファイル1つ
+
+```sh
+curl -fsSLO https://github.com/yf-1229/mask/releases/latest/download/mask_amd64.deb
+sudo apt install ./mask_amd64.deb
+```
+
+`dpkg -i` ではなく `apt install ./…`。依存は `libc6` と CA 証明書 (rustls は
+システムのルート証明書を読む) だけなので apt が解決します。
+ARM は `mask_arm64.deb`。apt が記録するのはバージョン付きの名前
+(`mask_1.0.0_amd64.deb`) なので、`apt show mask` / `apt remove mask` はそのまま使えます。
+
+パッケージが入れるのはバイナリ、`man mask`、`/usr/share/doc/mask/` の文書だけです。
+**サービスも `/etc` の設定も入れません。** ゲートウェイの起動は人間の操作で、
+オペレータトークンは起動した端末に出るためです。設定は上流の API キーを持つので、
+エージェントが動くチェックアウトの外、`~/.config/mask/mask.toml` (mode 600) に
+置きます。
+
+glibc の下限は、バイナリが実際に要求するシンボルから `Depends` に入ります
+(現行ビルドなら `libc6 (>= 2.34)`)。古いディストリでは、起動できないバイナリが
+入ってしまうのではなく、apt がパッケージ自体を断ります。
+
+### Linux / macOS — 1行
+
+```sh
+curl -fsSL https://mask.branchead.com/install.sh | sh
+```
+
+このマシン用のビルドを選び、リリースの `SHA256SUMS` と照合してから `~/.local/bin`
+に入れます (root なら `/usr/local/bin`、`--prefix DIR` も可)。設定は書かず、何も
+起動せず、キーも読みません。再実行がアップグレード、`--uninstall` はバイナリだけ
+消して設定と辞書は残します。
+
+先に中身を読みたい場合、バージョンを固定したい場合:
+
+```sh
+curl -fsSL https://mask.branchead.com/install.sh -o install.sh && less install.sh
+sh install.sh --dry-run
+curl -fsSL https://mask.branchead.com/install.sh | sh -s -- --version 1.0.0
+```
+
+リリースの全アセットは 1 つの `SHA256SUMS` で覆われているので、手で落とした
+パッケージも同じように検算できます:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Windows x86_64 と素の `mask-<target>` も同じリリースに添付しています。
+
+### ソースから
 
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
 cargo build --release          # target/release/mask(.exe)
-cp mask.toml.example mask.toml
-# mask.toml を編集: upstream.base_url / upstream.api_key
-./target/release/mask serve
+
+# 設定は上流キーを持つのでチェックアウトの外へ (エージェントはそこで動く)
+mkdir -p ~/.config/mask
+cp mask.toml.example ~/.config/mask/mask.toml
+chmod 600 ~/.config/mask/mask.toml
+$EDITOR ~/.config/mask/mask.toml   # upstream.base_url / upstream.api_key
+./target/release/mask serve        # 自分のターミナルで
 ```
 
 必要なのは [Rust ツールチェーン](https://rustup.rs) (1.82+) だけ。TLS は rustls、

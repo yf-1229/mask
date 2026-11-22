@@ -1,11 +1,19 @@
 name: Release
 
 # Tag a commit (`git tag v1.0.1 && git push --tags`) and this publishes the
-# native binaries: no Python runtime, no OpenSSL, no cmake — one self-contained
-# executable per platform.
+# binaries people install: no Python runtime, no OpenSSL, no cmake.
 #
-#   mask-<target>        Linux / macOS (chmod +x, drop it on your PATH)
-#   mask-<target>.exe    Windows
+#   mask-<target>              Linux / macOS, chmod +x, on your PATH
+#   mask-<target>.exe          Windows
+#   mask_<version>_<arch>.deb  Debian/Ubuntu, `apt install ./...`
+#   mask_<arch>.deb            the same file, versionless, for /latest/download
+#   SHA256SUMS                 every asset above, checked by install.sh
+#
+# Linux is built inside a Debian 12 container on purpose. The glibc symbols a
+# binary imports become the .deb's `Depends` and the floor the bare binary needs,
+# so building on the newest runner would publish artifacts only the newest runner
+# could run. One container, one baseline: `curl … | sh` and `apt install` put the
+# same bytes on the same machine.
 
 on:
   push:
@@ -30,12 +38,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            linker: aarch64-linux-gnu-gcc
-            apt: gcc-aarch64-linux-gnu
           - os: macos-13
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -50,20 +52,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross linker (linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.apt }}
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || 'gcc' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Stage the binary
@@ -84,9 +78,105 @@ jobs:
           path: mask-${{ matrix.target }}*
           if-no-files-found: error
 
+  linux:
+    name: linux (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    container: debian:12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            apt: ""
+            linker: ""
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+    steps:
+      # debian:12 has no git, and checkout needs one before anything else can
+      # run. Installing it first is one step, not a special case.
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ${{ matrix.apt }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-${{ matrix.arch }}
+
+      - name: Build
+        env:
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.linker || 'gcc' }}
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || 'gcc' }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Resolve the version
+        # The tag when this is a release push; the crate version for a manual
+        # run. Passed to the packager so it never has to execute a cross-built
+        # binary, which the amd64 runner cannot do for arm64.
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          fi
+          if [ -z "$v" ]; then
+            # An empty --version would send the packager back to executing the
+            # binary, which fails on the arm64 job for an unrelated reason.
+            echo "::error::could not resolve a version from ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Stage one binary, two deliveries
+        # The .deb payload and the bare `mask-<target>` are the same file, so the
+        # two install routes cannot drift — and a checksum in SHA256SUMS covers
+        # both. Nothing runs here: an aarch64 binary cannot execute on this host.
+        run: |
+          set -euo pipefail
+          install -D -m 0755 "target/${{ matrix.target }}/release/mask" "dist/mask-${{ matrix.target }}"
+
+      - name: Package
+        # build-deb.sh derives Architecture from the ELF header and Depends from
+        # the glibc symbols the binary imports — no hardcoded floor to drift.
+        run: |
+          set -euo pipefail
+          sh packaging/debian/build-deb.sh \
+            --binary "target/${{ matrix.target }}/release/mask" \
+            --arch "${{ matrix.arch }}" \
+            --version "${{ steps.version.outputs.value }}" \
+            --output dist
+          dpkg-deb --info dist/mask_*.deb
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: mask-linux-${{ matrix.arch }}
+          path: |
+            dist/mask-${{ matrix.target }}
+            dist/mask_*.deb
+          if-no-files-found: error
+
   publish:
     name: publish release assets
-    needs: build
+    needs: [build, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -94,12 +184,34 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: List assets
-        run: ls -l dist
+      - name: Stable names for the .deb
+        # Debian names a package with its version (mask_1.0.0_amd64.deb), which
+        # is right for apt and useless in a README. A second copy under
+        # mask_amd64.deb gives /releases/latest/download/ a URL that survives
+        # version bumps; the versioned file is still what apt records.
+        run: |
+          set -euo pipefail
+          cd dist
+          for deb in mask_*_*.deb; do
+            arch=${deb%_*.deb}
+            arch=${arch##*_}
+            cp "$deb" "mask_$arch.deb"
+          done
+          ls -l
+
+      - name: Checksums
+        # install.sh refuses to install a binary without a matching line here,
+        # and a .deb downloaded by hand can be checked the same way:
+        #   sha256sum -c SHA256SUMS --ignore-missing
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum mask-* mask_*.deb | LC_ALL=C sort -k2 > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/mask-*
+          files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true

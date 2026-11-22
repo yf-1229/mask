@@ -12,6 +12,9 @@ cargo build            # debug binary at target/debug/mask
 cargo test             # 159 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
+
+cargo build --release && sh scripts/install-test.sh
+                       # the .deb and install.sh, against a local mirror
 ```
 
 The [Rust toolchain](https://rustup.rs) (1.82+) is all you need: no C compiler
@@ -57,6 +60,36 @@ so it needs no network and no credentials.
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
+## Packaging
+
+Two front doors, one binary. Neither adds a second copy of it:
+
+```sh
+packaging/debian/build-deb.sh                       # -> dist/mask_<version>_<arch>.deb
+scripts/install-test.sh                             # both doors, against a local mirror
+```
+
+- `packaging/debian/build-deb.sh` takes an already-built binary and writes a
+  `.deb` with `dpkg-deb` alone — no `dpkg-buildpackage`, no debhelper. It derives
+  `Architecture` from the ELF header and the `libc6` floor from the versioned
+  symbols the binary imports, so the metadata cannot drift from the payload. The
+  package ships the binary, the man page and the documents: **no service, no
+  `/etc` configuration** — starting the gateway is a human's act, and the config
+  holds the upstream key. Two builds of one commit are byte-identical
+  (`SOURCE_DATE_EPOCH` defaults to the commit time), which the test asserts
+- `scripts/install.sh` is what `https://mask.branchead.com/install.sh` serves.
+  The site copy is staged from this file at deploy time (`.github/workflows/deploy-site.yml`),
+  so there is one script, not two. It must stay POSIX `sh`, verify against
+  `SHA256SUMS`, and fail closed when the sums are missing
+- `scripts/install-test.sh` is the CI gate for both. It builds the package,
+  checks the metadata and payload against what the README promises, unpacks it,
+  and drives the installer through the cases that must fail. `dpkg -i` runs there
+  too, on a throwaway runner, behind `MASK_TEST_DPKG_INSTALL=1`
+- A release is a tag: `.github/workflows/release.yml` builds Linux inside a
+  Debian 12 container (so the glibc floor is the oldest one the project supports,
+  not the newest runner's), builds macOS and Windows natively, and publishes the
+  binaries, the `.deb`, stable `mask_<arch>.deb` aliases and `SHA256SUMS`
+
 ## Website
 
 `site/index.html` is a single self-contained file with no external requests —
@@ -65,6 +98,7 @@ It is deployed to <https://mask.branchead.com/> as an assets-only Cloudflare
 Worker on its own subdomain; see `wrangler.jsonc`.
 
 ```sh
+cp scripts/install.sh site/install.sh   # what the deploy workflow stages
 python3 -m http.server 8877 -d site    # preview locally
 npx wrangler deploy                    # publish (maintainers only)
 ```

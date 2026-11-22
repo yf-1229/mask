@@ -1,0 +1,22 @@
+Package: mask
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Installed-Size: @INSTALLED_SIZE@
+Depends: @DEPENDS@
+Section: utils
+Priority: optional
+Homepage: https://mask.branchead.com/
+Description: PII pseudonymization gateway for local and cloud LLMs
+ mask sits between a client and an LLM API and replaces the personal data it
+ detects (names, addresses, phone numbers, cards, and your own dictionary
+ terms) with placeholders, then restores the answer on the way back. The model
+ only ever sees the placeholders.
+ .
+ The gateway is started by a person from their own terminal, because that
+ terminal is where the operator token for /admin is printed. This package
+ therefore installs a binary, a man page and the documents, not a service:
+ there is no enabled daemon, no open port, and no configuration file written
+ behind your back. The config holds your upstream API key, so it belongs in
+ ~/.config/mask/mask.toml with mode 600, outside any checkout that a coding
+ agent can read. See /usr/share/doc/mask/mask.toml.example.
