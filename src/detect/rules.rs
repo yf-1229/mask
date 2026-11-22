@@ -51,34 +51,51 @@ fn guard_keyword_right(c: char) -> bool {
     !(is_digit(c) || c.is_ascii_alphanumeric())
 }
 
+/// Group separators that actually arrive between digit groups: ASCII
+/// hyphen-minus, the ideographic space, and the punctuation a Japanese keyboard
+/// or spreadsheet puts in its place (U+2010 `‐`, U+30FC `ー`, U+2013 `–`,
+/// U+FF0D `－`, U+2212 `−`).
+///
+/// NFKC folds U+FF0D onto `-` for *entity identity*, but detection runs on the
+/// raw text, so this class has to name it: a phone number pasted out of Excel
+/// or a web form arrives as `０９０－１２３４－５６７８`, and leaving it out
+/// meant the one layer that protects it never saw it.
+const SEP: &str = " 　\\-‐ー–－−";
+
 fn email_re() -> Regex {
     Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").unwrap()
 }
 
 fn phone_re() -> Regex {
-    // Stationary/mobile/hyphenless, with area-code parentheses and +81
-    // international numbers. The leading 0 anchors the match.
+    // Two branches, each with its own anchor:
+    //
+    // * Domestic — the leading 0, which is also what keeps a date such as
+    //   `2019-04-01` out of the pattern. Area-code parentheses on either side
+    //   of the first group (`(03)1234-5678`) are accepted.
+    // * International — E.164 has no leading zero after the country code
+    //   (`+81 90 1234 5678`), so this branch anchors on the literal `+81`.
+    //   Without it the comment's promise of +81 support was not delivered.
     let pattern = format!(
         concat!(
-            r"(?:\+?81[ 　\-]?)?",
-            r"[(（]?[0０]{digit}{{1,4}}[)）]?",
-            r"(?:[ 　\-‐ー–]?{digit}{{2,4}}){{1,3}}",
+            r"(?:[(（]?[0０]{digit}{{1,4}}[)）]?(?:[{sep}]?{digit}{{2,4}}){{1,3}}",
+            r"|\+81[{sep}]?(?:[(（]?{digit}{{1,4}}[)）]?[{sep}]?){{1,3}}{digit}{{2,4}})",
         ),
         digit = D,
+        sep = SEP,
     );
     Regex::new(&pattern).unwrap()
 }
 
 fn address_re() -> Regex {
     let numpart = format!("(?:{D}{{1,4}}|[一二三四五六七八九十〇]{{1,4}})");
-    let num_mark = "(?:丁目|番地?|番|号|室|‐|ー|-)?";
+    let num_mark = "(?:丁目|番地?|番|号|室|‐|ー|-|－|−)?";
     let building_gen = concat!(
         "(?:マンション|アパート|ハイツ|コーポ|ビル|タワー|荘|ハウス|プラザ|",
         "ガーデン|レジデンス|寮)",
     );
     let pattern = format!(
         concat!(
-            r"(?:〒?[ \-]?{D}{{3}}[ \-]?{D}{{4}})?\s*",
+            r"(?:〒?[{sep}]?{D}{{3}}[{sep}]?{D}{{4}})?\s*",
             r"(?:[{KANJI}]{{1,10}}[都道府県])?",
             r"[{KANJI}]{{1,10}}?(?:市|区|町|村|巿|郡)",
             r"[{JP_ONLY}]{{1,10}}?",
@@ -95,6 +112,7 @@ fn address_re() -> Regex {
         BUILDING_GEN = building_gen,
         NP = numpart,
         NM = num_mark,
+        sep = SEP,
     );
     Regex::new(&pattern).unwrap()
 }
@@ -121,20 +139,32 @@ fn bank_account_re() -> Regex {
 }
 
 fn card_re() -> Regex {
-    let pattern = format!(r"(?:{D}{{4}}[ \-　]){{3}}{D}{{4}}", D = D);
+    let pattern = format!(r"(?:{D}{{4}}[{sep}]){{3}}{D}{{4}}", D = D, sep = SEP);
     Regex::new(&pattern).unwrap()
 }
 
 fn mynumber_re() -> Regex {
-    let pattern = format!(r"(?:{D}{{4}}[ \-　]){{2}}{D}{{4}}", D = D);
+    let pattern = format!(r"(?:{D}{{4}}[{sep}]){{2}}{D}{{4}}", D = D, sep = SEP);
     Regex::new(&pattern).unwrap()
 }
 
+/// `カード番号 4242…` — the keyword names the kind, so the type is `Card`.
+fn card_keyword_re() -> Regex {
+    Regex::new(concat!(
+        r"(?:カード番号)",
+        r"[ \s　]?(?:は|:|：|＝|=)?[ \s　]*",
+        r"([A-Za-z0-9０-９\-－]{6,20})",
+    ))
+    .unwrap()
+}
+
+/// `口座番号 …` and the other account-shaped identifiers. Card numbers are
+/// deliberately absent: they are `Card`, not `Account`.
 fn account_keyword_re() -> Regex {
     Regex::new(concat!(
-        r"(?:口座番号|カード番号|会員番号|生徒番号|社員番号)",
+        r"(?:口座番号|会員番号|生徒番号|社員番号)",
         r"[ \s　]?(?:は|:|：|＝|=)?[ \s　]*",
-        r"([A-Za-z0-9０-９\-]{6,20})",
+        r"([A-Za-z0-9０-９\-－]{6,20})",
     ))
     .unwrap()
 }
@@ -194,7 +224,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_no_digit),
             },
             Rule {
-                kind: EntityType::Account,
+                kind: EntityType::Card,
                 regex: card_re(),
                 group_one: false,
                 left: Some(guard_card_left),
@@ -210,6 +240,13 @@ fn rules() -> &'static Vec<Rule> {
             Rule {
                 kind: EntityType::Account,
                 regex: account_keyword_re(),
+                group_one: true,
+                left: None,
+                right: Some(guard_keyword_right),
+            },
+            Rule {
+                kind: EntityType::Card,
+                regex: card_keyword_re(),
                 group_one: true,
                 left: None,
                 right: Some(guard_keyword_right),

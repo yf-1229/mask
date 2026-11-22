@@ -422,7 +422,7 @@ pub fn canaries() -> &'static [Canary] {
                 (EntityType::Person, "佐藤花子"),
                 (EntityType::Phone, "08098761234"),
                 (EntityType::Account, "普通 1234567"),
-                (EntityType::Account, "4242 4242 4242 4242"),
+                (EntityType::Card, "4242 4242 4242 4242"),
             ],
         },
         Canary {
@@ -442,6 +442,24 @@ pub fn canaries() -> &'static [Canary] {
                 (EntityType::Phone, "０９０‐１２３４‐５６７８"),
                 (EntityType::Address, "大阪市北区梅田１丁目２番３号"),
             ],
+        },
+        Canary {
+            // The hyphen U+FF0D is what an IME, Excel and most web forms put
+            // between digit groups. It is not U+2010, so the `fullwidth` case
+            // above did not cover it and the number passed through unmasked.
+            name: "fullwidth_hyphen_phone",
+            text: "折り返しは ０７０－５５５５－１２３４ か 080－1111－2222 まで。",
+            expected: &[
+                (EntityType::Phone, "０７０－５５５５－１２３４"),
+                (EntityType::Phone, "080－1111－2222"),
+            ],
+        },
+        Canary {
+            // E.164 has no leading zero after the country code, so the
+            // domestic anchor never applied: this used to leave as-is.
+            name: "international_phone",
+            text: "海外からは +81 90 1234 5678 へ。",
+            expected: &[(EntityType::Phone, "+81 90 1234 5678")],
         },
     ]
 }
