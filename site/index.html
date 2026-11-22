@@ -91,7 +91,9 @@
 
   .head nav {
     display: flex;
-    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px 20px;
     font-size: 14px;
     color: var(--mid);
   }
@@ -124,12 +126,6 @@
     color: var(--soft);
     max-width: 31em;
     text-wrap: pretty;
-  }
-
-  .lede-tail {
-    margin-top: 4px;
-    font-size: 17px;
-    color: var(--mid);
   }
 
   .lede code {
@@ -273,6 +269,8 @@
     color: var(--mid);
   }
 
+  .step > div { min-width: 0; }
+
   .step h3 {
     font-size: 16px;
     font-weight: 600;
@@ -340,6 +338,57 @@
     color: #555;
   }
 
+  /* ------------------------------------------------------- section blocks */
+
+  .cap {
+    display: block;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--mid);
+    margin-bottom: 8px;
+  }
+
+  .block { margin-top: 34px; }
+  .block h3 { font-size: 16px; font-weight: 600; }
+  .block h3 + p { margin-top: 4px; }
+
+  section[id] { scroll-margin-top: 24px; }
+
+  /* -------------------------------------------------------------- examples */
+
+  .examples {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 28px;
+  }
+
+  .card {
+    min-width: 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 18px 20px;
+  }
+  .card .cap { margin-bottom: 4px; }
+  .card h3 { font-size: 15px; font-weight: 600; }
+  .card p { margin-top: 8px; font-size: 14px; color: var(--soft); }
+  .card pre { margin-top: 10px; background: var(--bg); }
+
+  .kv { margin-top: 12px; border-top: 1px solid var(--line); }
+  .kv div {
+    display: flex;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .kv dt { min-width: 130px; font-family: var(--mono); color: var(--mid); }
+  .kv dd { margin: 0; color: var(--soft); }
+  .kv b { color: var(--ink); font-weight: 600; }
+
   /* ---------------------------------------------------------------- footer */
 
   .foot {
@@ -373,6 +422,9 @@
     .wrap { padding: 0 16px; }
     pre { font-size: 11px; padding: 10px 12px; }
     .step { grid-template-columns: 18px 1fr; gap: 10px; }
+    .examples { grid-template-columns: 1fr; }
+    .kv div { flex-direction: column; gap: 0; }
+    .kv dt { min-width: 0; }
   }
 
   @media (max-width: 520px) {
@@ -398,21 +450,24 @@
       mask
     </a>
     <nav aria-label="ページ内">
-      <a href="#start">使い方</a>
-      <a href="#why">なぜ安全か</a>
+      <a href="#overview">概要</a>
+      <a href="#usage">使い方</a>
+      <a href="#examples">例</a>
+      <a href="#mechanism">仕組み</a>
       <a href="https://github.com/yf-1229/mask" rel="noopener">GitHub ↗</a>
     </nav>
   </header>
 
   <main>
 
-    <div class="hero">
-      <p class="eyebrow">ローカルで動く中継サーバー</p>
+    <section class="hero" id="overview">
+      <p class="eyebrow">01 — 概要 · ローカルで動く中継サーバー</p>
       <h1>実名は、<br>LLM に渡らない。</h1>
       <p class="lede">
-        名前も、電話番号も、住所も。送る前に <code>⟦人名1⟧</code> のような記号へ置き換え、
-        返ってきた答えは手元で元の実名に戻します。</p>
-      <p class="lede-tail">やることは、それだけです。</p>
+        LLM に仕事を頼むと、名前も、電話番号も、住所も、そのまま外へ出ます。
+        mask は手元で動く小さな中継サーバーで、送る直前にそれらを
+        <code>⟦人名1⟧</code> のような記号へ置き換えます。
+        返ってきた答えは手元で元の実名に戻すので、LLM が覚えるのは記号だけです。</p>
 
       <figure class="flow">
         <figcaption>1回のやり取りで起きること（例の住所は皇居の所在地）</figcaption>
@@ -433,7 +488,7 @@
       </figure>
 
       <div class="actions">
-        <a class="btn" href="#start">動かしてみる</a>
+        <a class="btn" href="#usage">動かしてみる</a>
         <a class="link" href="https://github.com/yf-1229/mask/releases">リリース（deb・バイナリ）↗</a>
       </div>
 
@@ -442,10 +497,11 @@
         <span>MIT License</span>
         <span>Windows / macOS / Linux</span>
       </p>
-    </div>
+    </section>
 
-    <section id="start">
-      <h2>使い方は3つだけ</h2>
+    <section id="usage">
+      <span class="cap">02 — 使い方</span>
+      <h2>まず、これだけ。</h2>
       <p class="sub">ツールチェーンがなくても入ります。上流の API キーは手元に置いたままです。</p>
 
       <ol class="steps">
@@ -489,39 +545,132 @@ export ANTHROPIC_API_KEY=&lt;gateway.token&gt;</code></pre>
           </div>
         </li>
       </ol>
+
+      <div class="block">
+        <h3>どれから入るか</h3>
+        <p class="sub">用途で選びます。どの入口でも、同じマスク層とリークゲートを通ります。</p>
+        <ul class="plain">
+          <li><b>エージェント</b><span>OpenAI 互換（<code>/v1/chat/completions</code>）と Anthropic 互換（<code>/v1/messages</code>）で待ち受けます。base URL を変えるだけで、既存のハーネスがそのまま繋がります。</span></li>
+          <li><b>シェル</b><span>1往復の <code>mask chat</code>、送信前の確認 <code>mask check</code>、姿勢の可視化 <code>mask status</code>。</span></li>
+          <li><b>ウェブ</b><span>このページは静的で、外部リクエストを出しません。設定と脅威モデルは README と SECURITY にあります。</span></li>
+        </ul>
+      </div>
     </section>
 
-    <section id="why">
-      <h2>安心してよい理由</h2>
+    <section id="examples">
+      <span class="cap">03 — 具体的な例</span>
+      <h2>1リクエストが、こう往復する。</h2>
+      <p class="sub">実名はゲートウェイの外に出ず、疑似名だけが LLM へ。応答は手元で実名に戻ります。以下は実際の入出力の例です。</p>
+
+      <div class="examples">
+        <article class="card">
+          <span class="cap">01 · CLIENT</span>
+          <h3>入力 — 実名入り</h3>
+          <p>ユーザーはいつも通り、実名で依頼します。</p>
+          <pre><code><span class="c">$</span> mask chat "佐藤美咲さんに 090-4821-7736 まで連絡して"</code></pre>
+          <p>上流へ送る JSON の <code>content</code> は、送信前に書き換わります。</p>
+          <pre><code>{
+  <span class="c">// 上流へ送られるペイロード</span>
+  "messages": [{
+    "role": "user",
+    "content": "⟦人名7⟧さんに ⟦電話3⟧ まで連絡して"
+  }]
+}</code></pre>
+        </article>
+
+        <article class="card">
+          <span class="cap">02 · GATEWAY</span>
+          <h3>マスク — 疑似名へ</h3>
+          <p>検出した実値を、この応答だけの一意なトークンへ置換します。</p>
+          <pre><code><span class="c">$</span> mask check "090-4821-7736"
+⟦電話3⟧</code></pre>
+          <p>置換した数はレスポンスヘッダで確認できます。</p>
+          <dl class="kv">
+            <div><dt>X-Mask</dt><dd><b>on</b></dd></div>
+            <div><dt>X-Mask-In</dt><dd><b>v1/messages</b> — 通った入口</dd></div>
+            <div><dt>X-Mask-Masked</dt><dd><b>2</b> — 人名と電話</dd></div>
+            <div><dt>X-Mask-Leak-Gate</dt><dd><b>block</b></dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <span class="cap">03 · LLM API</span>
+          <h3>応答 — 疑似名のまま</h3>
+          <p>LLM が見るのは疑似名だけ。実値は渡りません。</p>
+          <pre><code>{
+  "content": [{
+    "type": "text",
+    "text": "⟦人名7⟧さん宛にご案内を送りました。折り返し ⟦電話3⟧ までご連絡ください。"
+  }]
+}</code></pre>
+          <dl class="kv">
+            <div><dt>X-Mask-Restored</dt><dd><b>2</b> — 復元したトークン</dd></div>
+            <div><dt>X-Mask-Nonce</dt><dd><b>734dc18c9d7a</b> — 応答ごとに鋳造</dd></div>
+            <div><dt>X-Mask-Unresolved</dt><dd><b>0</b> — 未復元なし</dd></div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <span class="cap">04 · CLIENT</span>
+          <h3>復元 — 手元で実名へ</h3>
+          <p>帰り道でトークンを実名に戻してから、画面に表示します。</p>
+          <pre><code><span class="c">$</span> mask chat "佐藤美咲さんに 090-4821-7736 まで連絡して"
+佐藤美咲さん宛にご案内を送りました。折り返し 090-4821-7736 までご連絡ください。
+<span class="c">[mask] masked 2 / restored 2 / unresolved 0</span></code></pre>
+          <p>マッピングはプロセス内メモリのみ。ディスクにも外部にも出ません。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="mechanism">
+      <span class="cap">04 — 仕組み・保証</span>
+      <h2>なぜ漏れないかを、構造で示す。</h2>
       <p class="sub">検出の精度に頼らず、仕組みとして漏れを止めています。</p>
 
-      <ul class="plain">
-        <li><b>戻せないなら、送らない。</b><span>送信の直前に本文を丸ごと検査し、実値が1つでも残っていればリクエストごと中止します（既定は block）。</span></li>
-        <li><b>通さない経路がある。</b><span>対応していないエンドポイントは 403。実値が別の形で外へ出る道を作りません。</span></li>
-        <li><b>本物の API キーは外に出ない。</b><span>鍵を持つのは mask だけ。クライアントに配るのは <code>gateway.token</code> です。</span></li>
-        <li><b>対応表はディスクに残らない。</b><span>実名との対応はプロセス内のメモリだけに置き、ログにも値を書きません。</span></li>
-        <li><b>数字で確かめられる。</b><span>各応答の <code>X-Mask-*</code> ヘッダと <code>mask status</code> に、置換・復元した件数が出ます。</span></li>
-      </ul>
-    </section>
+      <div class="block">
+        <h3>一つの保証</h3>
+        <p class="sub">検出し損ねた PII は、最後の門で送信ごと棄却されます。マスクの出来不出来に依存しません。</p>
+      </div>
 
-    <section>
-      <h2>できないこと</h2>
-      <p class="sub">都合の悪い点も、そのまま書いておきます。</p>
+      <div class="block">
+        <h3>何を守るか</h3>
+        <ul class="plain">
+          <li><b>戻せないなら、送らない。</b><span>送信の直前に本文を丸ごと検査し、実値が1つでも残っていればリクエストごと中止します（既定は block）。</span></li>
+          <li><b>通さない経路がある。</b><span>対応していないエンドポイントは 403。実値が別の形で外へ出る道を作りません。</span></li>
+          <li><b>本物の API キーは外に出ない。</b><span>鍵を持つのは mask だけ。クライアントに配るのは <code>gateway.token</code> です。</span></li>
+          <li><b>対応表はディスクに残らない。</b><span>実名との対応はプロセス内のメモリだけに置き、ログにも値を書きません。</span></li>
+        </ul>
+      </div>
 
-      <ul class="plain">
-        <li><b>一度も検出できなかった値は止められません。</b><span>それを見つけるのが検出層の仕事で、カナリアテストが回帰を防ぎます。<code>mask audit</code> は手元の文書の取りこぼし候補（敬称前にある未マスクの名前）を行番号で示します。</span></li>
-        <li><b>人名検出は辞書ベースです。</b><span>統計モデルではありません。珍しい名前は <code>mask dict add 山田太郎</code> で登録してください。稼働中のゲートウェイは再起動なしで追加分を反映します（削除の反映だけは再起動まで待ちます）。</span></li>
-        <li><b>base URL を変えられないサービスは対象外です。</b><span>ChatGPT の web 版など、間に立てないものは通りません。</span></li>
-        <li><b>ストリーミングは最後にまとめて返します。</b><span>正確さを優先し、上流の応答を復元してから送り出します。</span></li>
-      </ul>
-    </section>
+      <div class="block">
+        <h3>数字で確かめる</h3>
+        <p class="sub">各応答の <code>X-Mask-*</code> ヘッダと <code>mask status</code> に、置換・復元した件数が出ます。</p>
+        <pre><code>X-Mask: on
+X-Mask-In: v1/messages
+X-Mask-Masked: 2
+X-Mask-Restored: 2
+X-Mask-Unresolved: 0
+X-Mask-Leak-Gate: block</code></pre>
+      </div>
 
-    <section>
-      <h2>もっと詳しく</h2>
-      <p class="sub">設定項目・封筒（暗号化した対応表の受け渡し）・脅威モデルは README と SECURITY にあります。</p>
-      <div class="actions">
-        <a class="btn" href="https://github.com/yf-1229/mask/blob/main/README.ja.md">README を読む ↗</a>
-        <a class="link" href="https://github.com/yf-1229/mask/blob/main/SECURITY.md">セキュリティ ↗</a>
+      <div class="block">
+        <h3>できないこと</h3>
+        <p class="sub">都合の悪い点も、そのまま書いておきます。</p>
+        <ul class="plain">
+          <li><b>一度も検出できなかった値は止められません。</b><span>それを見つけるのが検出層の仕事で、カナリアテストが回帰を防ぎます。<code>mask audit</code> は手元の文書の取りこぼし候補（敬称前にある未マスクの名前）を行番号で示します。</span></li>
+          <li><b>人名検出は辞書ベースです。</b><span>統計モデルではありません。珍しい名前は <code>mask dict add 山田太郎</code> で登録してください。稼働中のゲートウェイは再起動なしで追加分を反映します（削除の反映だけは再起動まで待ちます）。</span></li>
+          <li><b>base URL を変えられないサービスは対象外です。</b><span>ChatGPT の web 版など、間に立てないものは通りません。</span></li>
+          <li><b>ストリーミングは最後にまとめて返します。</b><span>正確さを優先し、上流の応答を復元してから送り出します。</span></li>
+        </ul>
+      </div>
+
+      <div class="block">
+        <h3>もっと詳しく</h3>
+        <p class="sub">設定項目・封筒（暗号化した対応表の受け渡し）・脅威モデルは README と SECURITY にあります。</p>
+        <div class="actions">
+          <a class="btn" href="https://github.com/yf-1229/mask/blob/main/README.ja.md">README を読む ↗</a>
+          <a class="link" href="https://github.com/yf-1229/mask/blob/main/SECURITY.md">セキュリティ ↗</a>
+        </div>
       </div>
     </section>
 
