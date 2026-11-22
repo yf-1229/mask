@@ -1,12 +1,19 @@
 # Rust build output
 /target/
 
+# Release artifacts: packaging/debian/build-deb.sh writes .deb files here
+/dist/
+
 # Local configuration and data — never commit these.
 # mask.toml holds the upstream API key; dictionary.tsv holds your own terms;
 # *.maskbox files are handoff envelopes (ciphertext, but still not for git).
 mask.toml
 dictionary.tsv
 *.maskbox
+
+# The install script is served from the site, staged there at deploy time from
+# scripts/install.sh so the two cannot drift.
+site/install.sh
 
 # Cloudflare / Wrangler
 .wrangler/

@@ -1,0 +1,107 @@
+.\" mask(1) — the shell entrance to the mask gateway.
+.\"
+.\" The version is substituted by packaging/debian/build-deb.sh; keep @VERSION@.
+.TH mask 1 "" "mask @VERSION@" "User Commands"
+.SH NAME
+mask \- PII pseudonymization gateway for local and cloud LLMs
+.SH SYNOPSIS
+.B mask
+[\fIOPTIONS\fR] \fICOMMAND\fR [\fIARGS\fR]
+.SH DESCRIPTION
+.B mask
+sits between a client and an LLM API. It detects personal data in the outgoing
+request, replaces it with placeholders such as
+.RB \(la 人名1 \(ra ,
+and restores the original values in the answer. The upstream model receives
+placeholders only.
+.PP
+The detection is offline: built\-in rules, a bundled name list and a dictionary
+of your own terms, with no model download and no network call of its own. A
+leak gate inspects every outgoing body and refuses the request when a value it
+was supposed to mask is still present (\fBgateway.leak_gate = "block"\fR).
+.PP
+The binary covers both sides: \fBmask serve\fR runs the gateway, the other
+commands are the human's entrance from a shell.
+.SH COMMANDS
+.TP
+.B check \fR[\fITEXT\fR]...
+Dry run: print the text as the model would receive it, with a table of what was
+replaced. No network, no upstream key. Reads stdin when no text is given.
+.TP
+.B audit \fR[\fIFILES\fR]...
+Dry run over files (\fB\-\fR is stdin). Prints the masked text plus line numbers
+of spans that look like personal data but were not matched, so a miss is
+visible instead of silent. \fB\-\-strict\fR exits 1 when such a span is found.
+.TP
+.B chat \fR[\fITEXT\fR]...
+One prompt through the running gateway, with the answer restored. Options:
+\fB\-\-model\fR (default \fIgpt\-4o\-mini\fR), \fB\-\-url\fR, \fB\-\-timeout\fR.
+.TP
+.B dict \fIadd\fR \fITERM\fR [\fITYPE\fR]
+Register a term in the dictionary file. A running gateway merges additions
+live; removals apply on restart.
+.TP
+.B dict \fIlist\fR
+Print the registered terms.
+.TP
+.B dict \fIcheck\fR
+Validate the dictionary file and report counts and line numbers. Values are
+never printed.
+.TP
+.B status
+Reliability panel of a running gateway: leak\-gate state, detection counts,
+admin\-channel posture. \fB\-\-json\fR prints the raw \fB/status\fR body.
+.TP
+.B serve
+Start the gateway. Binds \fB127.0.0.1:8080\fR unless configured otherwise.
+.SH OPTIONS
+.TP
+.B \-\-config \fIFILE\fR
+Path to \fBmask.toml\fR. Default: \fB$MASK_CONFIG\fR, then
+\fB$XDG_CONFIG_HOME/mask/mask.toml\fR (\fB~/.config/mask/mask.toml\fR), then
+\fB./mask.toml\fR.
+.TP
+.B \-\-no\-color
+Disable ANSI colours (also honoured from a pipe).
+.TP
+.B \-\-allow\-agent\-host
+(\fBserve\fR only.) Start the gateway although this shell belongs to an AI
+agent. The guard exists so that an agent cannot take over the operator's
+instance, or read the upstream key out of the running process; this flag is the
+human's deliberate override.
+.TP
+.B \-\-host \fIHOST\fR, \fB\-\-port \fIPORT\fR
+(\fBserve\fR only.) Override the bind address from the config or environment.
+.SH FILES
+.TP
+.I ~/.config/mask/mask.toml
+Operator's configuration, mode 600. Holds \fBupstream.api_key\fR and
+\fBgateway.token\fR; keep it outside any checkout that an agent can read.
+.TP
+.I /usr/share/doc/mask/mask.toml.example
+Every setting, with the environment variables that override it.
+.TP
+.I ./dictionary.tsv
+Optional extra terms, one \fIterm\fR TAB \fItype\fR per line. The path comes
+from \fBmask.dictionary\fR in the config.
+.SH THE OPERATOR CHANNEL
+\fB/admin/export\fR and \fB/admin/import\fR move the live pseudonym table
+between gateways. They require \fBgateway.token\fR \fIand\fR a token minted at
+startup and printed only to the gateway's own terminal, so a gateway started
+without a terminal has no admin channel at all. Requests whose \fBHost\fR is
+not a loopback address are refused (DNS rebinding).
+.SH EXAMPLES
+.nf
+mask check "山田太郎さんと 090\-1234\-5678 の件"
+mask audit docs/*.md \-\-strict
+mask dict add 取引先コード CUSTOM
+mask serve                 # in your own terminal
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+.fi
+.SH EXIT STATUS
+0 when the command completed, including when \fBcheck\fR found personal data:
+detection is the tool working, not a failure. 1 on an error, and for
+\fBaudit \-\-strict\fR when a likely miss was found.
+.SH SEE ALSO
+The project page at \fIhttps://mask.branchead.com/\fR, and \fBmask.toml.example\fR
+for the full configuration surface.
