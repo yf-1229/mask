@@ -25,6 +25,12 @@ Two design rules worth keeping when you edit this file:
 2. **Matching is on what runs, not on what is written.** Write and edit tools
    are judged by their target path only: documentation that *describes*
    `mask serve` is allowed, writing to `mask.toml` is not.
+3. **A command is judged by its shape, not by a substring of the line.** The
+   `mask` rules anchor on the executable token (see `mask_subcommand`), because
+   this checkout is itself called `mask`: a bare `\bmask\b … \bstatus\b` over the
+   line refused `cd …/mask && git status`, which is how an agent gets work done.
+   Path spellings of the executable (`~/.local/bin/mask`, `./target/release/mask`)
+   still match, so the anchor is not a way around the guard.
 
 Usage:
     agent-guard.sh                 # hook mode: JSON on stdin
@@ -65,20 +71,57 @@ OPERATOR_FILE = re.compile(
     r"(^|[/\s\"'=])\.env\b"
 )
 
+#: Where a shell starts a command: line start, or after a separator (and an
+#: opening quote, so `sh -c "mask serve"` is still read as a command).
+CMD_START = r"""(?:^|[\s;&|("'`$])"""
+
+#: The `mask` executable, optionally addressed through a path (`~/.local/bin/mask`,
+#: `./target/release/mask`, `mask.exe`). A path prefix is allowed on purpose:
+#: spelling the path out is the obvious way around the guard, so it must not work.
+MASK_EXE = r"(?:[^\s;&|]*/)?mask(?:\.exe)?"
+
+#: Flags and their values between the executable and the subcommand
+#: (`mask --config ~/.config/mask/mask.toml status`). Deliberately unable to
+#: cross a newline: hooks see whole scripts, so `cd …/mask` on one line and
+#: `git status` on the next must not be glued into a command nobody ran.
+MASK_ARGS = r"(?:[^\S\n]+[^\s;&|]+)*"
+
+
+def mask_subcommand(*names: str) -> re.Pattern[str]:
+    """Match `mask <subcommand …>` only where the shell would run it.
+
+    The checkout, the user's config directory and this file's own examples all
+    contain the word `mask` on paths. A bare `\\bmask\\b … \\bstatus\\b` over the
+    line therefore reads `cd …/Documents/mask && git status` as `mask status`
+    and refuses ordinary work — the reason this is anchored on the executable
+    token instead. The cost is that a command whose *argument* is a path ending
+    in `/mask` followed by one of these words (`git -C …/mask status`) is
+    refused too; that is the fail-closed direction, and `cd` first works.
+    """
+    return re.compile(
+        CMD_START + MASK_EXE + MASK_ARGS + r"[^\S\n]+(?:" + "|".join(names) + r")\b",
+        re.IGNORECASE,
+    )
+
+
 #: Rules that do not need a path or a verb to matter: the process itself, its
 #: controls, and the switches that turn the guards off.
 HARD_RULES: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"\bmask\b[^\n]*\b(serve|server)\b|\bcargo\s+run\b[^\n]*\bserve\b|"
-                   r"target/(debug|release)/mask\b[^\n]*\bserve\b", re.IGNORECASE),
+        mask_subcommand("serve", "server"),
         "starting the gateway is a human action: it holds the upstream key and the "
         "live pseudonym table. Ask the operator to run `mask serve`.",
     ),
     (
-        re.compile(r"\bmask\b[^\n]*\b(chat|status|dict)\b", re.IGNORECASE),
+        re.compile(r"\bcargo\s+run\b[^\n]*\bserve\b", re.IGNORECASE),
+        "starting the gateway is a human action: it holds the upstream key and the "
+        "live pseudonym table. Ask the operator to run `mask serve`.",
+    ),
+    (
+        mask_subcommand("chat", "status", "dict"),
         "that reaches the operator's gateway or their dictionary (their key, their "
-        "session, their terms). `mask check \"…\"` is local and fine; ask the operator "
-        "for the rest.",
+        "session, their terms). `mask check \"…\"` is local and fine; ask the "
+        "operator for the rest.",
     ),
     (
         re.compile(r"\b(pkill|killall)\b[^\n]*\bmask\b|\bkill\b[^\n]*\bmask\b", re.IGNORECASE),
@@ -245,11 +288,18 @@ ALLOWED = [
     "cargo test",
     "cargo clippy --all-targets",
     "git status",
+    # The false positive that motivated the command-position anchor: a
+    # checkout named `mask` followed by anything called `status`.
+    "cd /home/yuta/Documents/mask && git status --short",
+    "cd ~/Documents/mask && git log --grep=serve",
+    "cd /home/yuta/Documents/mask\ngit status",
     'mask check "call 山田太郎"',
+    'mask check "０９０－１２３４－５６７８"',
     "cat mask.toml.example",
     "rg -n 8080 src/",
     'grep -rn "mask.toml" src/gateway/config.rs',
     'grep -rn x-mask-admin src/gateway/mod.rs',
+    'grep -rn "mask status" src/',
     "grep -rn MASK_ADMIN_REQUIRE_HUMAN src/",
     "git log --grep 8080",
     "sed -n 1,60p src/gateway/guard.rs",
@@ -266,6 +316,14 @@ REFUSED = [
     "mask --no-color chat hi",
     "mask dict add 山田太郎",
     "mask dict list",
+    "mask --config ~/.config/mask/mask.toml dict list",
+    # A path to the executable must not be a way around the anchor.
+    "/home/yuta/.local/bin/mask serve",
+    "/home/yuta/.local/bin/mask status",
+    "./target/release/mask status",
+    'sh -c "mask serve"',
+    "cd /home/yuta/Documents/mask && mask chat hi",
+    "mask --no-color status",
     "pkill -f mask",
     "killall mask",
     "curl -s http://127.0.0.1:8080/status",

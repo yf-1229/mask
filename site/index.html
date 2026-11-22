@@ -453,7 +453,10 @@
           <div>
             <h3>起動する</h3>
             <pre><code>cargo build --release
-cp mask.toml.example mask.toml
+<span class="c"># 設定はチェックアウトの外へ（上流キーが入るため）</span>
+mkdir -p ~/.config/mask
+cp mask.toml.example ~/.config/mask/mask.toml
+chmod 600 ~/.config/mask/mask.toml
 <span class="c"># upstream.base_url / upstream.api_key を編集</span>
 ./target/release/mask serve</code></pre>
           </div>

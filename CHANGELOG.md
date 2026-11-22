@@ -42,6 +42,11 @@ Windows, macOS and Linux.
   agents, and `scripts/agent-guard.sh` enforces it before a command runs, wired
   through `.vibe/hooks.toml` (Vibe) and `.claude/settings.json` (Claude Code).
   Self-test: `sh scripts/agent-guard.sh --self-test`
+- The guard now judges a command by its shape: `mask` is matched as an
+  executable in command position, not as a substring of the line. A checkout
+  named `mask` followed by `git status` is repo work, not `mask status`, while
+  `~/.local/bin/mask status` and `sh -c "mask serve"` are still refused. The
+  self-test grows to 47 cases and runs in CI
 
 ### Dictionary work without a restart
 
@@ -105,8 +110,15 @@ Windows, macOS and Linux.
 
 ### Pseudonymization core
 
-- Detection pipeline: regex rules (phone, email, account, address), a TSV
+- Detection pipeline: regex rules (phone, email, account, address, card), a TSV
   dictionary, and built-in offline name detection
+- Phone rules accept the hyphen that actually arrives — U+FF0D `－` from an IME,
+  a spreadsheet or a web form, alongside ASCII `-` and U+2010/U+30FC — and
+  E.164 numbers without the leading zero (`+81 90 1234 5678`). Both used to pass
+  through unmasked while the README claimed full-width and `+81` support
+- Card numbers carry their own type (`⟦カード7⟧`, `card` in the dictionary
+  vocabulary) instead of being labelled as a bank account: a card can be
+  charged and an account drained, and the token tells the model which
 - NFKC normalization so full-width and half-width variants fold onto the same
   entity
 - Replacement with opaque, type-tagged tokens (`⟦人名7⟧`) and restoration of the

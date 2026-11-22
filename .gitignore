@@ -21,3 +21,6 @@ node_modules/
 
 # Python bytecode from scripts/agent-guard.py
 __pycache__/
+
+# Paseo workspace bookkeeping, written by the app per checkout
+paseo.json

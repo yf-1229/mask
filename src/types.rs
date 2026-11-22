@@ -12,10 +12,14 @@ pub enum EntityType {
     Phone,
     Email,
     Account,
+    /// Card numbers are a different disclosure from a bank account: a card can
+    /// be charged, an account can be drained, and the model is told which. The
+    /// token label says so (`⟦カード7⟧`, not `⟦口座7⟧`).
+    Card,
 }
 
 impl EntityType {
-    pub const ALL: [EntityType; 7] = [
+    pub const ALL: [EntityType; 8] = [
         EntityType::Person,
         EntityType::Org,
         EntityType::Location,
@@ -23,6 +27,7 @@ impl EntityType {
         EntityType::Phone,
         EntityType::Email,
         EntityType::Account,
+        EntityType::Card,
     ];
 
     /// Config/dictionary wire name (`person`, `org`, ...).
@@ -35,6 +40,7 @@ impl EntityType {
             EntityType::Phone => "phone",
             EntityType::Email => "email",
             EntityType::Account => "account",
+            EntityType::Card => "card",
         }
     }
 
@@ -48,6 +54,7 @@ impl EntityType {
             EntityType::Phone => "電話",
             EntityType::Email => "メール",
             EntityType::Account => "口座",
+            EntityType::Card => "カード",
         }
     }
 

@@ -49,6 +49,32 @@ fn rule_phone_parenthesised() {
 }
 
 #[test]
+fn rule_phone_fullwidth_hyphen() {
+    // U+FF0D, not U+2010: this is the hyphen an IME and a spreadsheet emit.
+    for text in ["０９０－１２３４－５６７８", "090－1234－5678"] {
+        let found = types_with_text(&run_rule_detection(&format!("電話は{text}です")));
+        assert!(
+            found.contains(&(EntityType::Phone, text.to_string())),
+            "full-width hyphen phone {text} was not detected: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn rule_phone_international() {
+    for (text, expected) in [
+        ("+81 90 1234 5678", "+81 90 1234 5678"),
+        ("+81-90-1234-5678", "+81-90-1234-5678"),
+    ] {
+        let found = types_with_text(&run_rule_detection(&format!("連絡先は {text} です")));
+        assert!(
+            found.contains(&(EntityType::Phone, expected.to_string())),
+            "international phone {text} was not detected: {found:?}"
+        );
+    }
+}
+
+#[test]
 fn rule_postal_and_address() {
     let found = types_with_text(&run_rule_detection(
         "〒160-0022 東京都新宿区新宿三丁目1番1号サカエビル203",
@@ -81,9 +107,29 @@ fn rule_bank_account() {
 #[test]
 fn rule_card_number() {
     let found = types_with_text(&run_rule_detection("カードは4242-4242-4242-4242"));
-    assert!(found
-        .iter()
-        .any(|(kind, text)| *kind == EntityType::Account && text.contains("4242")));
+    assert!(
+        found
+            .iter()
+            .any(|(kind, text)| *kind == EntityType::Card && text.contains("4242")),
+        "a card number must be typed Card, not Account: {found:?}"
+    );
+}
+
+#[test]
+fn rule_card_and_account_stay_distinct() {
+    let found = types_with_text(&run_rule_detection(
+        "口座番号は 1234567、カード番号は 4111 1111 1111 1111 です",
+    ));
+    assert!(found.contains(&(EntityType::Account, "1234567".into())));
+    assert!(found.contains(&(EntityType::Card, "4111 1111 1111 1111".into())));
+    // The 12-digit MyNumber rule also fires on a prefix of a 16-digit card;
+    // merge() keeps the longer Card span, so that overlap is expected here.
+    assert!(
+        !found
+            .iter()
+            .any(|(kind, text)| *kind == EntityType::Account && text == "4111 1111 1111 1111"),
+        "the whole card was labelled as an account: {found:?}"
+    );
 }
 
 #[test]

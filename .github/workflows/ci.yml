@@ -30,6 +30,18 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  guard:
+    name: agent-guard self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The hook still refuses the operator's gateway
+        # The contract in AGENTS.md is enforced by this script. A rule that
+        # silently stopped matching would leave the document describing a wall
+        # that is no longer there, so the rules are pinned by cases — including
+        # the repo work a checkout named `mask` must not trip over.
+        run: sh scripts/agent-guard.sh --self-test
+
   test:
     name: cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
