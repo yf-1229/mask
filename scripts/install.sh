@@ -47,10 +47,13 @@ Usage: sh install.sh [options]
   --base-url URL    where the release assets live
                     (default: $GITHUB_BASE)
                     a mirror is expected at URL/<tag>/<asset>, tag being
-                    "latest" or "v<version>"; file:// URLs work
+                    "latest" or "v<version>". https, file:// and — only for
+                    this machine — http on a loopback host are accepted;
+                    credentials in an http URL are refused, and a token in an
+                    https URL is never echoed
   --target TRIPLE   override the detected platform triple
   --no-verify       skip the SHA256SUMS check — installing an unverified binary
-  --dry-run         say what would happen, download nothing
+  --dry-run         say what would happen, download and remove nothing
   --uninstall       remove the binary from the prefix
   -h, --help        this text
 
@@ -133,7 +136,9 @@ if [ -z "$PREFIX" ]; then
 		PREFIX=${HOME:-}/.local
 	fi
 fi
-[ -n "$PREFIX" ] && [ "$PREFIX" != /.local ] || die "HOME is unset — pass --prefix DIR"
+# The default was built from $HOME above; if HOME was empty it produced a path
+# that is not a home directory, so say what to do instead of installing there.
+[ "$PREFIX" != /.local ] || die "HOME is unset — pass --prefix DIR"
 case "$PREFIX" in
 /) ;;
 *) PREFIX=${PREFIX%/} ;;
@@ -223,8 +228,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 url_host() {
 	_rest=${1#*://}
 	_rest=${_rest%%[/?#]*}
+	# Defensive: callers refuse credentials before asking for the host. If one
+	# stops doing that, this still compares the host rather than the userinfo.
 	case "$_rest" in
-	*@*) _rest=${_rest##*@} ;; # the caller refuses credentials; belt and braces
+	*@*) _rest=${_rest##*@} ;;
 	esac
 	case "$_rest" in
 	\[*)
@@ -253,7 +260,7 @@ fetch() { # url dest
 
 	# Credentials in a plain-http URL are how a loopback-looking prefix hides a
 	# remote host. Over https they are a normal way to reach a private mirror, so
-	# the refusal lives in the http arm below, not here.
+	# the refusal lives in the http arm, not here.
 	case "$_url" in
 	https://*) ;;
 	http://*)
@@ -278,16 +285,43 @@ fetch() { # url dest
 	*) die "unsupported URL scheme: $(redact "$_url")" ;;
 	esac
 
+	# Credentials go to the downloader as an option, not inside the URL: curl and
+	# wget quote the URL in their own errors, and `-s` does not silence those.
+	# They are still in argv, so `ps` can see them for the length of the
+	# download — use a mirror without credentials if that matters.
+	_creds=
+	case "$_url" in
+	*://*@*)
+		_scheme=${_url%%://*}
+		_rest=${_url#*://}
+		_creds=${_rest%%@*}
+		_url="$_scheme://${_rest#*@}"
+		;;
+	esac
+
 	if have curl; then
+		set -- -fsSL --retry 2
+		if [ -n "$_creds" ]; then
+			set -- "$@" --user "$_creds"
+		fi
 		case "$_url" in
-		https://*) curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 2 -o "$_dest" "$_url" ;;
-		*) curl -fsSL --retry 2 -o "$_dest" "$_url" ;;
+		https://*) set -- "$@" --proto '=https' --proto-redir '=https' --tlsv1.2 ;;
 		esac
+		curl "$@" -o "$_dest" "$_url"
 	elif have wget; then
+		set --
+		if [ -n "$_creds" ]; then
+			_wuser=${_creds%%:*}
+			case "$_creds" in
+			*:*) _wpass=${_creds#*:} ;;
+			*) _wpass= ;;
+			esac
+			set -- --user="$_wuser" --password="$_wpass"
+		fi
 		case "$_url" in
 		# wget follows a redirect to plain http unless it is told not to.
-		https://*) wget --https-only -q -O "$_dest" "$_url" ;;
-		*) wget -q -O "$_dest" "$_url" ;;
+		https://*) wget --https-only -q "$@" -O "$_dest" "$_url" ;;
+		*) wget -q "$@" -O "$_dest" "$_url" ;;
 		esac
 	else
 		die "neither curl nor wget is installed"

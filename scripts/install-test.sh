@@ -15,8 +15,10 @@
 #                                     checksum, a missing SHA256SUMS, plain http
 #                                     off loopback, an unknown flag).
 #
-# No network, no root, no gateway: the mirror is a file:// directory holding the
-# same asset names a release publishes. Exit status is the number of failures.
+# No network, no root, no gateway: the real install runs against a file://
+# directory holding the same asset names a release publishes, and the URL-policy
+# cases run with a stub `curl` on PATH, so even those open no socket. Exit status
+# is the number of failures.
 #
 # The one step that touches the host, `dpkg -i`, only runs when
 # MASK_TEST_DPKG_INSTALL=1 is set (CI sets it on a throwaway runner) and no
@@ -221,6 +223,11 @@ else
 		else
 			fail "a legitimate +build1 revision was refused"
 		fi
+		if sh "$ROOT/packaging/debian/build-deb.sh" --binary "$BINARY" --version '2.0.0+build1' --output "$WORK/deb6" >/dev/null 2>&1; then
+			fail "build-deb packaged 2.0.0+build1 around a binary that reports $version"
+		else
+			pass "a revision of a different upstream version is refused"
+		fi
 
 		# A real dpkg install is the only way to know the metadata is
 		# satisfiable on this system. It is opt-in because it changes the host:
@@ -420,16 +427,28 @@ for fooling in "http://[::1]evil.example/releases" "http://127.0.0.1.evil.exampl
 	fi
 done
 
-# A token in an https mirror URL is a normal way to reach a private mirror, and
-# it must never be echoed: these messages get pasted into issues.
-if PATH="$WORK/failing-curl:$PATH" sh "$installer" --base-url 'https://user:s3cr3t@mirror.invalid/m' --version "$version" --target "$target" --prefix "$prefix" >"$WORK/https-auth.log" 2>&1; then
+# A token in an https mirror URL is a normal way to reach a private mirror. It
+# must be passed to the downloader as an option — curl echoes the URL in its own
+# errors — and never printed, because these messages get pasted into issues.
+mkdir -p "$WORK/recording-curl"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "$CURL_ARGS_LOG"\nexit 1\n' >"$WORK/recording-curl/curl"
+chmod +x "$WORK/recording-curl/curl"
+
+if CURL_ARGS_LOG="$WORK/curl.args" PATH="$WORK/recording-curl:$PATH" sh "$installer" \
+	--base-url 'https://user:s3cr3t@mirror.invalid/m' --version "$version" --target "$target" --prefix "$prefix" >"$WORK/https-auth.log" 2>&1; then
 	fail "install reached a mirror that is not there"
 elif grep -q 'credentials' "$WORK/https-auth.log"; then
 	fail "an https mirror with credentials was refused: $(tail -1 "$WORK/https-auth.log")"
+elif ! grep -q 'download failed' "$WORK/https-auth.log"; then
+	fail "the https-with-credentials case did not even attempt a download: $(tail -1 "$WORK/https-auth.log")"
 elif grep -q 's3cr3t' "$WORK/https-auth.log"; then
 	fail "the mirror token appeared in the installer's output"
+elif ! grep -qF -- '--user user:s3cr3t' "$WORK/curl.args"; then
+	fail "the token was not passed as an option: $(cat "$WORK/curl.args")"
+elif grep -qF 's3cr3t@' "$WORK/curl.args"; then
+	fail "the token was left inside the URL handed to curl: $(cat "$WORK/curl.args")"
 else
-	pass "an https mirror with credentials is attempted, and the token is not printed"
+	pass "an https mirror with credentials is attempted, passed with --user, and never printed"
 fi
 
 if sh "$installer" --dry-run --base-url 'https://user:s3cr3t@mirror.invalid/m' >"$WORK/dry-auth.log" 2>&1 &&
