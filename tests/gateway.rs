@@ -400,13 +400,13 @@ async fn canary_corpus_never_reaches_upstream() {
     let h = start_with(config, MockKind::Echo).await;
     for canary in common::canaries() {
         let response = h
-            .post_json("/v1/chat/completions", chat_body(canary.text))
+            .post_json("/v1/chat/completions", chat_body(&canary.text))
             .await;
         assert_eq!(response.status(), 200, "{}", canary.name);
         let raw = h.upstream.sent_raw();
-        for (_, value) in canary.expected {
+        for (_, value) in &canary.expected {
             assert!(
-                !raw.contains(value),
+                !raw.contains(value.as_str()),
                 "{}: {value:?} reached upstream",
                 canary.name
             );

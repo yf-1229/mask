@@ -23,13 +23,13 @@ itself (see [Guardrails](#guardrails-what-actually-stops-you)).
 |---|---|---|
 | 1 | Starting, stopping, restarting or reloading `mask serve`, or `kill`/`pkill`/`killall` on a `mask` process | The operator's instance holds their upstream key and their live pseudonym table. Killing it silently loses every mapping, and the next turn sends real values upstream unmasked. |
 | 2 | `mask serve --allow-agent-host`, `MASK_ALLOW_AGENT_HOST=1`, `MASK_AGENT_HOST_GUARD=0`, `MASK_ADMIN_REQUIRE_HUMAN=0` | These are the doors you are being asked not to walk through. Starting a gateway, or opening its admin channel, is a human action. |
-| 3 | Reading `mask.toml`, `~/.config/mask/mask.toml`, `dictionary.tsv`, `*.maskbox`, or any `.env` | They carry the upstream key, the human's own terms, and handoff envelopes. Reading them is a leak even if you only print the path. If you need to know a setting, read `mask.toml.example` or ask. |
-| 4 | Writing, moving, chmod-ing or deleting those files | Same. Config changes are the human's, made in their editor. |
+| 3 | Reading `mask.toml`, `~/.config/mask/mask.toml`, `dictionary.tsv` (including `mask dict list`/`check`), `*.maskbox`, or any `.env` | They carry the upstream key, the human's own terms, and handoff envelopes. Reading them is a leak even if you only print the path. If you need to know a setting, read `mask.toml.example` or ask. |
+| 4 | Writing, moving, chmod-ing or deleting those files (including `mask dict add`) | Same. Config changes are the human's, made in their editor or their shell. |
 | 5 | Calling `/admin/export` or `/admin/import` (or `curl`/`wget`/`nc`/`socat`/`http` against port 8080 at all), or guessing the `x-mask-admin` operator token | `/admin/export` hands out the live mapping table. The token exists only on the human's terminal by design. |
 | 6 | Port-scanning, `lsof -i :8080`, or probing to see "if the gateway is up" | The gateway being up is the human's business. Ask them. |
 | 7 | Weakening a guarantee in the data path: `leak_gate = "warn"`, widening `passthrough_allowlist`, disabling NER, removing the admin gate, `admin_allow_remote = true` | Each one is a deliberate trade-off a human made. Propose the change; do not slip it in. |
 | 8 | Deleting or loosening the tests that pin those guarantees (`tests/guard.rs`, the canary suite, `tests/leak*`, `tests/sharing.rs` lockout cases) | A test that stops asserting a guarantee reads, later, as a guarantee that never existed. |
-| 9 | Publishing: `git push`, `cargo publish`, `wrangler deploy`, Docker pushes, publishing releases | The human publishes. You only have to commit|
+| 9 | Publishing: `git push`, `cargo publish`, `wrangler deploy`, Docker pushes, publishing releases | The human publishes. You only have to commit |
 
 If a task genuinely requires one of these — "why does `/admin/export` fail for
 me?" — do the part that does not need the secret (read the handler, write a test
@@ -62,7 +62,7 @@ refused, because a request an agent composes by hand spends the operator's key
 and rewrites their session. Ask the human to run those.
 
 ```
-agent may:  edit src/, add tests, run cargo test, run `mask check "…"` (no network)
+agent may:  edit src/, add tests, run cargo test, run `mask check "…"` / `mask audit` (no network)
 agent may:  reach the gateway through its own harness base URL — a setting, not a command
 agent must: stop before serve/kill/export/read-secrets/posture-changes, and ask
 ```
@@ -129,11 +129,11 @@ loosen the guard deliberately. Never present a blocked action as done.
 
 - **触ってはいけない**: 稼働中の `mask serve`（起動・停止・再起動）、
   `mask.toml` / `~/.config/mask/mask.toml` / `dictionary.tsv` / `*.maskbox` /
-  `.env` の読み書き、`/admin/export`・`/admin/import`（および 8080 番への
+  `.env` の読み書き (`mask dict` も同様)、`/admin/export`・`/admin/import`（および 8080 番への
   接続・スキャン）、`leak_gate` や `passthrough_allowlist` など保証を緩める変更、
   それらを検証しているテストの削除、`git push` / `cargo publish` / デプロイ。
 - **してよい**: ソースの編集、`cargo fmt` / `clippy` / `test`（自前のモック上流で
-  完結します）、`mask check`（ネットワークなし）、自分の harness の base URL
+  完結します）、`mask check` / `mask audit`（ネットワークなし）、自分の harness の base URL
   設定としてゲートウェイへ向けること（シェルからの `mask chat` / `mask status` /
   8080 番への接続はフックが拒否します）。
 - **迷ったら**: 実行せず、人間に「これは稼働中のインスタンスに触りますが、

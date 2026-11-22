@@ -1,0 +1,56 @@
+# Canary corpus: known PII that MUST be detected (recall gate) and MUST NOT
+# reach an upstream. Add a case as a block; `text:` is required, then one
+# `<type>: <value>` line per expected entity. Types: person, org, location,
+# address, phone, email, account, card.
+#
+# The tests read this file at compile time (`include_str!`), so a case added
+# here is exercised on the next `cargo test`.
+
+# case: basic_contact
+text: お問い合わせは 山田太郎 (yamada.taro@example.co.jp, 090-1234-5678) まで。fax は 03-1234-5678 です。
+person: 山田太郎
+email: yamada.taro@example.co.jp
+phone: 090-1234-5678
+phone: 03-1234-5678
+
+# case: address_full
+text: 配送先は 〒160-0022 東京都新宿区新宿三丁目1番1号 サカエビル203 です。山田太郎様あて。
+address: 〒160-0022 東京都新宿区新宿三丁目1番1号
+person: 山田太郎
+
+# case: address_ward_only
+text: 詳細住所は港区赤坂一丁目2番3号のマンション103号室です。
+address: 港区赤坂一丁目2番3号
+
+# case: bank_account
+text: お振込みは 佐藤花子 (08098761234) の 三菱UFJ銀行 新宿支店 普通 1234567 にお願いします。カード番号は 4242 4242 4242 4242 です。
+person: 佐藤花子
+phone: 08098761234
+account: 普通 1234567
+card: 4242 4242 4242 4242
+
+# case: multiple_people
+text: 山田太郎と佐藤花子が契約者である。山田太郎の勤務先は株式会社ACMEで、連絡先は tanaka@acme.example.jp。
+person: 山田太郎
+person: 佐藤花子
+org: 株式会社ACME
+email: tanaka@acme.example.jp
+
+# case: fullwidth
+text: 連絡先は ０９０‐１２３４‐５６７８。住所は大阪市北区梅田１丁目２番３号。
+phone: ０９０‐１２３４‐５６７８
+address: 大阪市北区梅田１丁目２番３号
+
+# case: fullwidth_hyphen_phone
+# The hyphen U+FF0D is what an IME, Excel and most web forms put between digit
+# groups. It is not U+2010, so the `fullwidth` case above did not cover it and
+# the number passed through unmasked.
+text: 折り返しは ０７０－５５５５－１２３４ か 080－1111－2222 まで。
+phone: ０７０－５５５５－１２３４
+phone: 080－1111－2222
+
+# case: international_phone
+# E.164 has no leading zero after the country code, so the domestic anchor
+# never applied: this used to leave as-is.
+text: 海外からは +81 90 1234 5678 へ。
+phone: +81 90 1234 5678

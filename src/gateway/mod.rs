@@ -31,7 +31,9 @@ pub use config::{GatewayConfig, LeakGate, SessionScope};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::SystemTime;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
@@ -43,7 +45,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::detect::dictionary::UserDictionary;
+use crate::detect::dictionary::{MergeReport, UserDictionary};
 use crate::gateway::agent::{
     anthropic_stream_events, anthropic_to_openai, openai_to_anthropic, restored_strings,
 };
@@ -79,12 +81,30 @@ pub const ENTRY_ANTHROPIC: &str = "v1/messages";
 /// Upper bound for a request body (32 MiB).
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
+/// File-watch state for `[mask].dictionary`: the `(mtime, len)` of the file as
+/// last applied. One `stat` per request is the whole price of live reload; it
+/// keeps the guarantee honest for a request that arrives right after a write.
+#[derive(Debug, Default)]
+struct DictionaryWatch {
+    /// `None` means "the file was not there when we last looked".
+    stamp: Option<(SystemTime, u64)>,
+}
+
+fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    Some((modified, metadata.len()))
+}
+
 /// Shared gateway state.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<GatewayConfig>,
     pub http: reqwest::Client,
-    pub dictionary: Arc<UserDictionary>,
+    /// Live dictionary. `/status` reports its size only; `mask dict add` edits
+    /// the file and the gateway merges additions without a restart.
+    pub dictionary: Arc<RwLock<UserDictionary>>,
+    dictionary_watch: Arc<Mutex<DictionaryWatch>>,
     pub indicators: Arc<Indicators>,
     /// `Some` in global scope: one table for the whole process.
     pub session: Option<Arc<Mutex<Session>>>,
@@ -102,16 +122,80 @@ impl AppState {
     /// Run `f` with the session for this request: the shared one in global
     /// scope, a fresh one in request scope.
     fn with_session<T>(&self, f: impl FnOnce(&mut Session) -> T) -> T {
+        // Refresh before taking the session lock: a reload takes the dictionary
+        // lock, then the session lock, and must not meet the reverse order.
+        self.refresh_dictionary();
         match &self.session {
             Some(shared) => {
                 let mut guard = shared.lock().expect("session mutex poisoned");
                 f(&mut guard)
             }
             None => {
-                let mut session = Session::new((*self.dictionary).clone(), self.config.use_ner);
+                let dictionary = self
+                    .dictionary
+                    .read()
+                    .expect("dictionary lock poisoned")
+                    .clone();
+                let mut session = Session::new(dictionary, self.config.use_ner);
                 f(&mut session)
             }
         }
+    }
+
+    /// Re-read the dictionary file when it changed.
+    ///
+    /// The merge is additive: a file edit can add terms or correct a type, but
+    /// cannot remove detection coverage from a running process. Deleting the
+    /// file reads as empty and changes nothing.
+    fn refresh_dictionary(&self) {
+        let Some(path) = self.config.dictionary_path.as_deref() else {
+            return;
+        };
+        let mut watch = self
+            .dictionary_watch
+            .lock()
+            .expect("dictionary watch mutex poisoned");
+        let stamp = file_stamp(path);
+        if stamp == watch.stamp {
+            return;
+        }
+        let newer = match UserDictionary::load(path) {
+            Ok(newer) => newer,
+            Err(error) => {
+                // Record the stamp anyway: the old table stays, and the file
+                // gets another chance on its next change (or an explicit
+                // /admin/dictionary/reload).
+                watch.stamp = stamp;
+                tracing::warn!(%error, "dictionary reload failed; keeping the loaded table");
+                return;
+            }
+        };
+        watch.stamp = stamp;
+        drop(watch);
+        self.merge_dictionary(&newer);
+    }
+
+    /// Merge `newer` into the live table and into a global session's copy.
+    ///
+    /// Counts only reach the log and the indicators; no term text does.
+    fn merge_dictionary(&self, newer: &UserDictionary) -> MergeReport {
+        let mut dictionary = self.dictionary.write().expect("dictionary lock poisoned");
+        let report = dictionary.merge_additive(newer);
+        if report.changed() {
+            self.indicators.incr(Count::DictionaryReloads);
+            tracing::info!(
+                added = report.added,
+                updated = report.updated,
+                kept = report.kept,
+                terms = report.terms,
+                "dictionary reloaded (additive; removals wait for a restart)"
+            );
+            if let Some(shared) = &self.session {
+                let mut session = shared.lock().expect("session mutex poisoned");
+                session.dictionary = dictionary.clone();
+            }
+        }
+        report
     }
 
     fn mapping_records(&self) -> usize {
@@ -125,7 +209,12 @@ impl AppState {
     }
 
     fn posture(&self) -> Value {
-        build_posture(&self.config, self.mapping_records(), self.dictionary.size())
+        let terms = self
+            .dictionary
+            .read()
+            .map(|dictionary| dictionary.size())
+            .unwrap_or(0);
+        build_posture(&self.config, self.mapping_records(), terms)
     }
 }
 
@@ -135,6 +224,9 @@ impl AppState {
 pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Router {
     crate::install_crypto_provider();
 
+    // Stamp before loading: a write that lands in between is then seen as a
+    // change by the first poll instead of being skipped.
+    let dictionary_stamp = config.dictionary_path.as_deref().and_then(file_stamp);
     let dictionary = match &config.dictionary_path {
         Some(path) => UserDictionary::load(path).unwrap_or_else(|error| {
             tracing::error!(%error, "cannot load dictionary; continuing without it");
@@ -168,7 +260,10 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
     let state = AppState {
         config: Arc::new(config),
         http,
-        dictionary: Arc::new(dictionary),
+        dictionary: Arc::new(RwLock::new(dictionary)),
+        dictionary_watch: Arc::new(Mutex::new(DictionaryWatch {
+            stamp: dictionary_stamp,
+        })),
         indicators: Arc::new(Indicators::new()),
         session,
         admin_human_token: state_admin_token,
@@ -183,6 +278,7 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
         .route("/v1/messages", post(messages))
         .route("/admin/export", post(admin_export))
         .route("/admin/import", post(admin_import))
+        .route("/admin/dictionary/reload", post(admin_dictionary_reload))
         .fallback(passthrough)
         .with_state(state)
 }
@@ -1255,6 +1351,55 @@ async fn admin_import(State(state): State<AppState>, request: Request) -> Respon
                 "invalid": invalid,
             },
             "conflicts": conflicts,
+        }),
+    )
+}
+
+/// Re-read `[mask].dictionary` now instead of waiting for the watcher.
+///
+/// The merge is additive, exactly like the hot path: this endpoint can add
+/// terms or correct a type, never remove one, so it cannot be used to quiet
+/// detection mid-session. The response is counts only — no term ever appears.
+async fn admin_dictionary_reload(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(denied) = admin_authorized(&state, &request) {
+        return denied;
+    }
+    let Some(path) = state.config.dictionary_path.clone() else {
+        return error_response(
+            StatusCode::CONFLICT,
+            "mask_no_dictionary",
+            "no [mask].dictionary is configured; nothing to reload",
+        );
+    };
+    // Stamp first, then load: a write that lands between the two leaves a
+    // different stamp behind, so the next poll reloads instead of skipping.
+    let stamp = file_stamp(&path);
+    let newer = match UserDictionary::load(&path) {
+        Ok(newer) => newer,
+        Err(error) => {
+            tracing::error!(%error, "admin dictionary reload: cannot read the file");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "mask_dictionary_unreadable",
+                "cannot read the dictionary file",
+            );
+        }
+    };
+    let report = state.merge_dictionary(&newer);
+    {
+        let mut watch = state
+            .dictionary_watch
+            .lock()
+            .expect("dictionary watch mutex poisoned");
+        watch.stamp = stamp;
+    }
+    json_response(
+        StatusCode::OK,
+        json!({
+            "added": report.added,
+            "updated": report.updated,
+            "kept": report.kept,
+            "terms": report.terms,
         }),
     )
 }

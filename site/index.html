@@ -477,7 +477,8 @@ export ANTHROPIC_API_KEY=&lt;gateway.token&gt;</code></pre>
             <h3>あとは普段どおり使う</h3>
             <p>いつもどおり名前を書けば、外へ出るのは記号だけです。ターミナルからは
               <code>mask chat "…"</code>、送る前に何が置き換わるか見たいときは
-              <code>mask check "…"</code>。</p>
+              <code>mask check "…"</code>。珍しい名前を登録するときは
+              <code>mask dict add …</code>。</p>
           </div>
         </li>
       </ol>
@@ -501,8 +502,8 @@ export ANTHROPIC_API_KEY=&lt;gateway.token&gt;</code></pre>
       <p class="sub">都合の悪い点も、そのまま書いておきます。</p>
 
       <ul class="plain">
-        <li><b>一度も検出できなかった値は止められません。</b><span>それを見つけるのが検出層の仕事で、カナリアテストが回帰を防ぎます。</span></li>
-        <li><b>人名検出は辞書ベースです。</b><span>統計モデルではないので、珍しい名前は <code>dictionary.tsv</code> に足してください。</span></li>
+        <li><b>一度も検出できなかった値は止められません。</b><span>それを見つけるのが検出層の仕事で、カナリアテストが回帰を防ぎます。<code>mask audit</code> は手元の文書の取りこぼし候補（敬称前にある未マスクの名前）を行番号で示します。</span></li>
+        <li><b>人名検出は辞書ベースです。</b><span>統計モデルではありません。珍しい名前は <code>mask dict add 山田太郎</code> で登録してください。稼働中のゲートウェイは再起動なしで追加分を反映します（削除の反映だけは再起動まで待ちます）。</span></li>
         <li><b>base URL を変えられないサービスは対象外です。</b><span>ChatGPT の web 版など、間に立てないものは通りません。</span></li>
         <li><b>ストリーミングは最後にまとめて返します。</b><span>正確さを優先し、上流の応答を復元してから送り出します。</span></li>
       </ul>

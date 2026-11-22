@@ -147,12 +147,14 @@ fn rule_recall_on_canaries() {
     let mut hits = 0usize;
     let mut misses: Vec<String> = Vec::new();
     for canary in canaries() {
-        let found = types_with_text(&run_rule_detection(canary.text));
-        for (kind, value) in canary.expected {
+        let found = types_with_text(&run_rule_detection(&canary.text));
+        for (kind, value) in &canary.expected {
             if matches!(*kind, EntityType::Person | EntityType::Org) {
                 continue; // name detection territory
             }
-            let hit = found.iter().any(|(k, t)| k == kind && t.contains(*value));
+            let hit = found
+                .iter()
+                .any(|(k, t)| k == kind && t.contains(value.as_str()));
             if hit {
                 hits += 1;
             } else {
@@ -427,12 +429,12 @@ fn canary_recall_gate_full_pipeline() {
     let mut session = Session::new(UserDictionary::new(), true);
     let mut misses: Vec<String> = Vec::new();
     for canary in canaries() {
-        let (_, result) = session.masked(canary.text);
-        for (kind, value) in canary.expected {
+        let (_, result) = session.masked(&canary.text);
+        for (kind, value) in &canary.expected {
             let hit = result
                 .entities
                 .iter()
-                .any(|e| e.kind == *kind && e.text.contains(value));
+                .any(|e| e.kind == *kind && e.text.contains(value.as_str()));
             if !hit {
                 misses.push(format!("{}: {kind:?} {value:?}", canary.name));
             }
@@ -445,10 +447,10 @@ fn canary_recall_gate_full_pipeline() {
 fn canary_no_raw_pii_in_masked_output() {
     let mut session = Session::new(UserDictionary::new(), true);
     for canary in canaries() {
-        let (masked, _) = session.masked(canary.text);
-        for (_, value) in canary.expected {
+        let (masked, _) = session.masked(&canary.text);
+        for (_, value) in &canary.expected {
             assert!(
-                !masked.contains(value),
+                !masked.contains(value.as_str()),
                 "{}: {value:?} leaked into masked text",
                 canary.name
             );
@@ -460,7 +462,7 @@ fn canary_no_raw_pii_in_masked_output() {
 fn canary_masked_text_keeps_one_token_per_entity() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[0];
-    let (masked, _) = session.masked(canary.text);
+    let (masked, _) = session.masked(&canary.text);
     assert_eq!(masked.matches('⟦').count(), masked.matches('⟧').count());
     assert_eq!(
         masked.matches('⟦').count(),
@@ -473,10 +475,14 @@ fn canary_masked_text_keeps_one_token_per_entity() {
 fn canary_restore_round_trip() {
     let mut session = Session::new(UserDictionary::new(), true);
     for canary in canaries() {
-        let (masked, _) = session.masked(canary.text);
+        let (masked, _) = session.masked(&canary.text);
         let out = session.unmasked(&masked);
-        for (_, value) in canary.expected {
-            assert!(out.text.contains(value), "{}: lost {value:?}", canary.name);
+        for (_, value) in &canary.expected {
+            assert!(
+                out.text.contains(value.as_str()),
+                "{}: lost {value:?}",
+                canary.name
+            );
         }
         assert!(out.unresolved_tokens.is_empty());
     }
@@ -486,7 +492,7 @@ fn canary_restore_round_trip() {
 fn canary_streaming_restore_matches_batch() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[1];
-    let (masked, _) = session.masked(canary.text);
+    let (masked, _) = session.masked(&canary.text);
     let chars: Vec<char> = masked.chars().collect();
     let mut emitted = String::new();
     let mut pending = String::new();
@@ -498,8 +504,11 @@ fn canary_streaming_restore_matches_batch() {
     }
     emitted.push_str(&pending);
     let out = session.unmasked(&emitted);
-    for (_, value) in canary.expected {
-        assert!(out.text.contains(value), "streaming lost {value:?}");
+    for (_, value) in &canary.expected {
+        assert!(
+            out.text.contains(value.as_str()),
+            "streaming lost {value:?}"
+        );
     }
 }
 
@@ -507,7 +516,7 @@ fn canary_streaming_restore_matches_batch() {
 fn audit_catches_model_mentioning_raw_pii() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[0];
-    let (masked, _) = session.masked(canary.text);
+    let (masked, _) = session.masked(&canary.text);
     let out = session.unmasked(&format!("{masked} 本名で言いますと山田太郎です。"));
     assert!(out
         .warnings

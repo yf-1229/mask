@@ -69,6 +69,17 @@ fn render_status_flags_warn_gate() {
 }
 
 #[test]
+fn render_status_shows_live_dictionary_reloads() {
+    let snapshot = json!({
+        "posture": {"dictionary_terms": 4, "mapping_records": 0},
+        "counts": {"dictionary_reloads": 2, "tokens_unresolved": 0},
+    });
+    let text = render_status(&snapshot, false);
+    assert!(text.contains("4 terms"), "{text}");
+    assert!(text.contains("2 live reloads"), "{text}");
+}
+
+#[test]
 fn render_status_colorizes_on_request() {
     let snapshot = json!({
         "posture": {"leak_gate": "block", "leak_gate_active": true},
@@ -159,10 +170,10 @@ fn binary_reports_a_missing_config_file() {
 }
 
 #[test]
-fn binary_help_lists_the_four_entrances() {
+fn binary_help_lists_every_entrance() {
     let output = binary().arg("--help").output().expect("cannot run mask");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    for command in ["check", "chat", "status", "serve"] {
+    for command in ["check", "audit", "chat", "status", "serve", "dict"] {
         assert!(stdout.contains(command), "missing {command} in {stdout}");
     }
 }

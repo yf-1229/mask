@@ -7,6 +7,7 @@
 pub mod dictionary;
 pub mod ner;
 pub mod rules;
+pub mod suspect;
 
 use crate::types::{DetectionResult, Entity, Source};
 
