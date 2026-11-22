@@ -12,10 +12,11 @@
 //! user's machine and must see real values (their results flow back in and get
 //! masked like any other input).
 //!
-//! Scope: images/thinking blocks are dropped, and `stream: true` buffers the
-//! upstream to completion before emitting the event sequence (one text delta
-//! with the fully restored text). Correct, not incremental — same tradeoff as
-//! the OpenAI streaming path.
+//! Scope: images/thinking blocks are dropped. `stream: true` restores each
+//! upstream text delta as it arrives and forwards it as an Anthropic
+//! `text_delta`; a token split across chunks is held until complete. Tool-call
+//! arguments are stitched and restored before their `tool_use` block is
+//! emitted at end of stream.
 
 use serde_json::{json, Map, Value};
 
@@ -249,7 +250,7 @@ pub fn restored_strings(
     }
 }
 
-fn finish_reason(value: Option<&str>) -> &'static str {
+pub fn finish_reason(value: Option<&str>) -> &'static str {
     match value {
         Some("length") => "max_tokens",
         Some("content_filter") => "refusal",
@@ -348,91 +349,107 @@ pub fn openai_to_anthropic(
 
 // --- streaming translation ---------------------------------------------------
 
-/// Anthropic SSE event sequence for a buffered (fully restored) response.
+/// One Anthropic SSE event. Blank-line terminated, as the protocol requires.
+fn sse_event(name: &str, payload: Value) -> String {
+    format!("event: {name}\ndata: {payload}\n\n")
+}
+
+/// `message_start` for a stream whose text is restored incrementally.
 ///
-/// Parity with the OpenAI streaming path: upstream chunks are buffered,
-/// restored as a whole, then emitted as a correct Anthropic event stream.
-/// Latency is all-at-once; ordering and shapes are what agent harnesses expect.
-pub fn anthropic_stream_events(message: &Value, text: &str, tool_uses: &[Value]) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    let mut event = |etype: &str, payload: Value| {
-        lines.push(format!("event: {etype}"));
-        lines.push(format!("data: {payload}"));
-        lines.push(String::new());
-    };
-
-    let mut skeleton = message.clone();
-    if let Value::Object(map) = &mut skeleton {
-        map.insert("content".to_string(), json!([]));
-    }
-    event(
+/// `stop_reason` is null here by protocol; the final `message_delta` carries
+/// the real one. Usage is also finalized there, so the skeleton starts at zero.
+pub fn anthropic_stream_start(id: &str, model: &str) -> String {
+    sse_event(
         "message_start",
-        json!({"type": "message_start", "message": skeleton}),
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": id,
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": Value::Null,
+                "stop_sequence": Value::Null,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            },
+        }),
+    )
+}
+
+pub fn anthropic_text_block_start(index: usize) -> String {
+    sse_event(
+        "content_block_start",
+        json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "text", "text": ""},
+        }),
+    )
+}
+
+pub fn anthropic_text_delta(index: usize, text: &str) -> String {
+    sse_event(
+        "content_block_delta",
+        json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": text},
+        }),
+    )
+}
+
+pub fn anthropic_block_stop(index: usize) -> String {
+    sse_event(
+        "content_block_stop",
+        json!({"type": "content_block_stop", "index": index}),
+    )
+}
+
+/// A complete `tool_use` content block: start, one JSON delta, stop.
+pub fn anthropic_tool_block(index: usize, call: &Value) -> String {
+    let mut out = sse_event(
+        "content_block_start",
+        json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {
+                "type": "tool_use",
+                "id": call.get("id").and_then(Value::as_str).unwrap_or("toolu_mask"),
+                "name": call.get("name").and_then(Value::as_str).unwrap_or(""),
+                "input": {},
+            },
+        }),
     );
+    let input = call.get("input").cloned().unwrap_or_else(|| json!({}));
+    out.push_str(&sse_event(
+        "content_block_delta",
+        json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string()),
+            },
+        }),
+    ));
+    out.push_str(&anthropic_block_stop(index));
+    out
+}
 
-    let mut index = 0usize;
-    if !text.is_empty() {
-        event(
-            "content_block_start",
-            json!({"type": "content_block_start", "index": index,
-                   "content_block": {"type": "text", "text": ""}}),
-        );
-        event(
-            "content_block_delta",
-            json!({"type": "content_block_delta", "index": index,
-                   "delta": {"type": "text_delta", "text": text}}),
-        );
-        event(
-            "content_block_stop",
-            json!({"type": "content_block_stop", "index": index}),
-        );
-        index += 1;
-    }
-
-    for call in tool_uses {
-        event(
-            "content_block_start",
-            json!({
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": call.get("id").and_then(Value::as_str).unwrap_or("toolu_mask"),
-                    "name": call.get("name").and_then(Value::as_str).unwrap_or(""),
-                    "input": {},
-                },
-            }),
-        );
-        let input = call.get("input").cloned().unwrap_or_else(|| json!({}));
-        event(
-            "content_block_delta",
-            json!({
-                "type": "content_block_delta",
-                "index": index,
-                "delta": {
-                    "type": "input_json_delta",
-                    "partial_json": serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string()),
-                },
-            }),
-        );
-        event(
-            "content_block_stop",
-            json!({"type": "content_block_stop", "index": index}),
-        );
-        index += 1;
-    }
-
-    event(
+/// Closing pair: `message_delta` (stop reason + usage) then `message_stop`.
+pub fn anthropic_stream_end(stop_reason: &str, usage: Value) -> String {
+    let mut out = sse_event(
         "message_delta",
         json!({
             "type": "message_delta",
             "delta": {
-                "stop_reason": message.get("stop_reason").and_then(Value::as_str).unwrap_or("end_turn"),
+                "stop_reason": stop_reason,
                 "stop_sequence": Value::Null,
             },
-            "usage": message.get("usage").cloned().unwrap_or_else(|| json!({})),
+            "usage": usage,
         }),
     );
-    event("message_stop", json!({"type": "message_stop"}));
-    lines.join("\n")
+    out.push_str(&sse_event("message_stop", json!({"type": "message_stop"})));
+    out
 }

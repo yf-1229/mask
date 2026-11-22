@@ -163,6 +163,10 @@ Windows, macOS and Linux.
 - Anthropic-compatible entrance (`/v1/messages`), including `tools` /
   `tool_use` / `tool_result` loops and a correct SSE event sequence for
   `stream: true`
+- Streaming restores each text delta as it arrives instead of buffering the
+  upstream to completion. A token split across SSE chunks is held in a tail
+  buffer until complete; EOF flushes it and emits `finish_reason` /
+  `message_stop`
 - Deny-by-default routing: only supported endpoints and
   `gateway.passthrough_allowlist` paths are forwarded; everything else is 403
 - Pre-flight leak gate: the whole payload and forwarded headers are walked
@@ -232,8 +236,6 @@ Windows, macOS and Linux.
 
 ### Known limitations
 
-- `stream: true` buffers the upstream response before restoring it (accurate,
-  not incremental)
 - Built-in name detection is lexicon-based: unfamiliar names and rare
   orthographies need a `dictionary.tsv` entry
 - Unsupported Anthropic content blocks (images, thinking) are dropped

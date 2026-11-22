@@ -97,6 +97,93 @@ async fn streaming_request_gets_restored_sse() {
     assert!(!text.contains('⟦'), "{text}");
 }
 
+async fn start_with_dict_kind(kind: MockKind) -> common::Harness {
+    let config = mask::gateway::config::GatewayConfig {
+        dictionary_path: Some(common::dict_file(&[("山田太郎", "person")])),
+        ..common::base_config()
+    };
+    start_with(config, kind).await
+}
+
+fn streamed_json(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .collect()
+}
+
+async fn assert_split_token_is_restored(kind: MockKind) {
+    let h = start_with_dict_kind(kind).await;
+    let mut body = chat_body("山田太郎さんの件");
+    body["stream"] = json!(true);
+    let response = h.post_json("/v1/chat/completions", body).await;
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    let restored: String = streamed_json(&text)
+        .iter()
+        .filter_map(|chunk| {
+            chunk
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+        })
+        .collect();
+    assert_eq!(restored, "山田太郎さんの件");
+    assert!(
+        !restored.contains('⟦'),
+        "token leaked to client: {restored}"
+    );
+    let finish = streamed_json(&text)
+        .iter()
+        .filter_map(|chunk| {
+            chunk
+                .pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str)
+        })
+        .next_back()
+        .map(str::to_string);
+    assert_eq!(finish.as_deref(), Some("stop"), "{text}");
+}
+
+#[tokio::test]
+async fn stream_token_split_after_open_is_restored() {
+    assert_split_token_is_restored(MockKind::SplitAfterOpen).await;
+}
+
+#[tokio::test]
+async fn stream_token_split_inside_is_restored() {
+    assert_split_token_is_restored(MockKind::SplitInside).await;
+}
+
+#[tokio::test]
+async fn stream_token_split_before_close_is_restored() {
+    assert_split_token_is_restored(MockKind::SplitBeforeClose).await;
+}
+
+#[tokio::test]
+async fn first_restored_text_arrives_before_the_upstream_finishes() {
+    let h = start_with_dict_kind(MockKind::SlowStream).await;
+    let mut body = chat_body("山田太郎さんの件");
+    body["stream"] = json!(true);
+    let started = std::time::Instant::now();
+    let mut response = h.post_json("/v1/chat/completions", body).await;
+    assert_eq!(response.status(), 200);
+    let first = tokio::time::timeout(Duration::from_millis(1500), response.chunk())
+        .await
+        .expect("first chunk was withheld until the upstream finished")
+        .expect("stream ended before its first chunk")
+        .unwrap();
+    let first = String::from_utf8_lossy(&first).to_string();
+    assert!(first.contains("山田太郎"), "first chunk: {first}");
+    assert!(!first.contains('⟦'), "first chunk: {first}");
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "first chunk took {:?}",
+        started.elapsed()
+    );
+    let rest = response.text().await.unwrap();
+    assert!(rest.contains("さん"), "rest: {rest}");
+}
+
 #[tokio::test]
 async fn upstream_error_passes_through() {
     let h = start(MockKind::Echo).await;

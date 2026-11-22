@@ -22,6 +22,12 @@ use crate::types::EntityType;
 
 const FUZZY_MAX_DISTANCE: usize = 2;
 
+/// Longest unterminated `⟦…` tail worth holding for the next chunk: open
+/// bracket + the longest label (`カード`, `メール`; 3 chars) + up to 3 id
+/// digits + closing bracket, plus [`FUZZY_MAX_DISTANCE`] so a token that is
+/// merely corrupted (not truncated) can still be repaired once it completes.
+const STREAM_TAIL_MAX: usize = 1 + 3 + 3 + 1 + FUZZY_MAX_DISTANCE;
+
 fn token_re() -> &'static Regex {
     static RE: LazyLock<Regex> = LazyLock::new(|| {
         let labels = EntityType::ALL
@@ -121,8 +127,7 @@ pub fn restore_stream_buffer(buffer: &str) -> (String, String) {
         return (buffer[..end].to_string(), buffer[end..].to_string());
     }
     // unterminated token candidate: hold back while it could still complete
-    let plausible = 1 + 3 + 3 + 1 + 2; // open + label + digits + close + slack
-    if tail.chars().count() <= plausible {
+    if tail.chars().count() <= STREAM_TAIL_MAX {
         return (buffer[..last_open].to_string(), tail.to_string());
     }
     (buffer.to_string(), String::new())
