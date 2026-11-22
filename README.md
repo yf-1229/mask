@@ -39,7 +39,7 @@ There is no weaker path.
 |---|---|---|
 | Proxy (OpenAI-compatible) | OpenAI-style harnesses and agents | `base URL = http://127.0.0.1:8080/v1` |
 | Proxy (Anthropic-compatible) | Claude Code and similar | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`, `ANTHROPIC_API_KEY=<gateway.token>` |
-| Shell (CLI) | Humans | `mask chat` / `mask check` / `mask status` / `mask dict` / `mask serve` |
+| Shell (CLI) | Humans | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask dict` / `mask serve` |
 
 ### Anthropic-compatible entrance (`/v1/messages`)
 
@@ -60,6 +60,7 @@ The Anthropic Messages protocol is accepted in a model-agnostic way:
 ```sh
 mask chat "call 山田太郎 for me"   # one round trip; the answer is restored
 mask check "090-1234-5678"        # dry run: what would be masked (no network)
+mask audit notes.md               # mask files; report likely misses (line numbers)
 mask status                       # reliability indicator panel
 mask status --json                # raw /status snapshot
 mask dict add 山田太郎             # register a term; a running gateway picks it up
@@ -72,6 +73,13 @@ mask serve                        # start the gateway
   types) on stderr, so it pipes cleanly
 - `chat` talks to a running gateway and prints the response body to stdout, with
   a reliability footer derived from the `X-Mask-*` headers
+- `audit` runs the same detector over whole files (or stdin) and prints the
+  masked text to stdout. On stderr it reports entity counts and the line numbers
+  of **likely misses**: an unmasked run of 2–4 kanji immediately before an
+  honorific (`鈴木一郎様`), which is the shape of a personal name the lexicon did
+  not know. The report carries no values — only counts and line numbers — and
+  `--strict` exits 1 so a docs CI can gate on it. A name written in kana, or
+  longer than four characters, is outside this hint
 - `dict add` is the path from a detection miss to a registered term: it
   validates the term, keeps comments and line endings, and replaces
   `dictionary.tsv` atomically. A running gateway merges additions on the next
@@ -93,7 +101,8 @@ dependency-free detector that ships inside the binary:
    it; the gateway re-reads the file and merges additions while it runs
    (additive: a reload can add a term, never remove one — removal waits for a
    restart, because a restart also clears the mapping table).
-3. **Built-in name detection** — an offline surname lexicon (300 entries) plus a
+3. **Built-in name detection** — an offline surname lexicon (540+ names in
+   `src/detect/surnames.txt`) plus a
    given-name extension that stops at honorifics and function words. It needs no
    model file and starts instantly.
 
@@ -101,8 +110,9 @@ Trade-off, stated plainly: a statistical NER model has wider recall on
 unfamiliar names than a lexicon. The canary corpus (`tests/pipeline.rs`,
 `tests/gateway.rs`, `tests/dictionary.rs`) pins the recall the tool claims, and
 anything it misses belongs in `dictionary.tsv` — that is the highest-trust layer
-and beats the built-in detector on span ties. Registering it is one command, and
-a running gateway takes it without losing the table.
+and beats the built-in detector on span ties. `mask audit` points at the likely
+misses in your own files (unmasked names before an honorific), registering one is
+`mask dict add`, and a running gateway takes it without losing the table.
 
 ## Reliability indicators
 
@@ -363,7 +373,9 @@ Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` 
 - Built-in name detection is lexicon-based, not statistical: unfamiliar names and
   rare orthographies need an entry in `dictionary.tsv` (`mask dict add`).
   Additions are live; removals wait for a restart, so a reload cannot quietly
-  lower recall
+  lower recall. `mask audit`'s miss hint only looks at kanji runs before
+  honorifics — kana names and names longer than four characters are not pointed
+  at
 - Paths added to the allowlist pass through unmasked (the leak gate still
   applies). Be careful adding schemas that can carry PII (embeddings, …)
 - Cloud services whose base URL cannot be changed (ChatGPT web, …) are out of scope
@@ -371,7 +383,7 @@ Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` 
 ## Tests
 
 ```sh
-cargo test          # 175 tests
+cargo test          # 195 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
@@ -381,7 +393,10 @@ name detector, the OpenAI and Anthropic entrances (against a real loopback mock
 upstream), the leak gate, deny-by-default routing, the indicator surfaces, the
 encrypted handoff (crypto, expiry, lockout, single use, admin flow), the TOML/env
 configuration, and the CLI — including the **canary suite** that proves no known
-real value reaches the upstream. CI runs it on Linux, macOS and Windows.
+real value reaches the upstream. The corpus is data
+(`tests/corpus/canary.txt`), so a case can be added without Rust, and
+`tests/corpus.rs` checks that every expected value really occurs in its text.
+CI runs it on Linux, macOS and Windows.
 
 ## Website
 

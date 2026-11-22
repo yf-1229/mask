@@ -173,7 +173,7 @@ fn binary_reports_a_missing_config_file() {
 fn binary_help_lists_every_entrance() {
     let output = binary().arg("--help").output().expect("cannot run mask");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    for command in ["check", "chat", "status", "serve", "dict"] {
+    for command in ["check", "audit", "chat", "status", "serve", "dict"] {
         assert!(stdout.contains(command), "missing {command} in {stdout}");
     }
 }

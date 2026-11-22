@@ -37,7 +37,7 @@ English README: [README.md](README.md) ／ 公式サイト: **https://mask.branc
 |---|---|---|
 | プロキシ (OpenAI互換) | OpenAI 系ハーネス/エージェント | `base URL = http://127.0.0.1:8080/v1` |
 | プロキシ (Anthropic互換) | Claude Code など | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=<gateway.token>` |
-| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask status` / `mask dict` / `mask serve` |
+| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask dict` / `mask serve` |
 
 ### Anthropic 互換入口 (`/v1/messages`)
 
@@ -58,6 +58,7 @@ English README: [README.md](README.md) ／ 公式サイト: **https://mask.branc
 ```sh
 mask chat "山田太郎さんに連絡して"     # 1往復。応答は復元済み
 mask check "090-1234-5678 です"       # 事前確認: 何がマスクされるか (ネット不要)
+mask audit notes.md                   # 文書をまとめて点検 (取りこぼし候補を行番号で)
 mask status                           # 信頼性インジケータパネル
 mask status --json                    # /status の生スナップショット
 mask dict add 山田太郎                 # 用語を登録 (稼働中のゲートウェイが即座に拾う)
@@ -70,6 +71,12 @@ mask serve                            # ゲートウェイ起動
   インジケータ (検出数・タイプ)。パイプで繋げます
 - `chat` は稼働中のゲートウェイに繋ぎ、応答本文を stdout へ。
   `X-Mask-*` ヘッダから信頼性フッタも表示
+- `audit` は同じ検出器をファイル全体 (または stdin) に通し、マスク済み本文を
+  stdout に出します。stderr には検出数と、**取りこぼし候補の行番号**を出します
+  (敬称の直前にある未マスクの漢字2〜4文字 = 辞書が知らない姓・名の形)。
+  レポートに実値は含めず、件数と行番号だけです。`--strict` は候補が1件でも
+  あれば exit 1 なので、文書の CI ゲートに使えます。かな表記の名前や5文字以上の
+  名前はこのヒントの対象外です
 - `dict add` は「取りこぼし → 登録」の一本道です。用語を検証し、コメントと
   改行コードを保ったまま `dictionary.tsv` をアトミックに置き換えます。稼働中の
   ゲートウェイは次のリクエストから追加分をマージし、**再起動も対応表のロストも
@@ -236,15 +243,16 @@ Python 版の spaCy/ja_ginza パイプラインは、バイナリに同梱した
    業務で重要な名前はここに入れます。`mask dict add 山田太郎` で追記でき、
    稼働中のゲートウェイはファイルを読み直して追加分をマージします
    (追加のみ。削除は再起動待ち — 再起動は対応表も消すため)。
-3. **組み込みの人名検出** — 約300語の姓辞書 + 敬称・機能語で止まる名前拡張。
+3. **組み込みの人名検出** — 540語超の姓辞書 (`src/detect/surnames.txt`) +
+   敬称・機能語で止まる名前拡張。
    モデルファイル不要で起動は即時です。
 
 トレードオフも明記します: 統計的 NER モデルの方が未知の名前への再現率は高い。
 このツールが主張する再現率はカナリアコーパス (`tests/pipeline.rs`、
 `tests/gateway.rs`、`tests/dictionary.rs`) で固定されており、取りこぼした名前は
 `dictionary.tsv` に入れるのが正解です (最高信頼の層で、同じスパンなら組み込み
-検出より優先)。登録は 1 コマンドで済み、稼働中のゲートウェイも対応表を失わずに
-受け取ります。
+検出より優先)。`mask audit` が自分の文書の取りこぼし候補を指し、登録は `mask dict add` の
+1 コマンドで済み、稼働中のゲートウェイも対応表を失わずに受け取ります。
 
 ## セットアップ
 
@@ -357,12 +365,14 @@ status_public = false        # /status インジケータの公開 (数字のみ
 - 組み込みの人名検出は統計モデルではなく辞書ベースです。珍しい名前・
   表記は `dictionary.tsv` への登録が必要です (`mask dict add`)。追加は
   稼働中にマージされますが、削除・撤回は再起動まで反映されません
-  (リロードで再現率を下げられないようにするための規則です)。
+  (リロードで再現率を下げられないようにするための規則です)。`mask audit` の
+  取りこぼしヒントは敬称前の漢字2〜4文字だけで、かな表記や5文字以上の名前は
+  指しません。
 
 ## テスト
 
 ```sh
-cargo test          # 175 テスト
+cargo test          # 195 テスト
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
@@ -371,7 +381,9 @@ cargo fmt --all --check
 (実ループバックのモック上流に対して)、リークゲート、デフォルト拒否ルーティング、
 インジケータ、暗号化ハンドオフ (暗号・期限・ロック・使い捨て・管理フロー)、
 TOML/環境変数設定、CLI を網羅。上流に実値が出ないことを証明する
-カナリアスイートを含みます。CI は Linux・macOS・Windows で実行します。
+カナリアスイートを含みます。コーパスはデータ (`tests/corpus/canary.txt`) なので
+Rust を書かずにケースを追加でき、`tests/corpus.rs` が期待値の綴りと本文の一致を
+検証します。CI は Linux・macOS・Windows で実行します。
 
 ## 公式ウェブサイト
 

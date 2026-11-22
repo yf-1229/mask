@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! mask check '...'    # dry-run: what would be masked, no network, no LLM
+//! mask audit FILE     # dry-run over files, plus likely-miss line numbers
 //! mask chat '...'     # one prompt, through the gateway, restored answer
 //! mask status         # reliability indicator panel of a running gateway
 //! mask dict add ...   # register a term; a running gateway picks it up live
@@ -24,6 +25,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
 use crate::detect::dictionary::{append_or_update, AddOutcome, ParseReport, UserDictionary};
+use crate::detect::suspect::{scan as scan_suspicions, Suspicion};
 use crate::gateway::config::GatewayConfig;
 use crate::session::Session;
 use crate::types::{DetectionResult, EntityType};
@@ -81,6 +83,17 @@ enum Command {
     Check {
         /// text to check (or pipe via stdin)
         text: Vec<String>,
+    },
+    /// dry-run over files: mask, then point at likely detection misses
+    Audit {
+        /// files to audit ('-' reads stdin; default: stdin)
+        files: Vec<PathBuf>,
+        /// exit 1 when a suspicious span is found (for docs CI)
+        #[arg(long)]
+        strict: bool,
+        /// report only; do not print the masked text
+        #[arg(long)]
+        no_output: bool,
     },
     /// one prompt through the gateway; the answer is restored PII
     Chat {
@@ -174,6 +187,11 @@ async fn run(cli: Cli) -> Result<i32> {
     let config = GatewayConfig::load(cli.config.as_deref())?;
     match cli.command {
         Command::Check { text } => cmd_check(&text, &config, colorize),
+        Command::Audit {
+            files,
+            strict,
+            no_output,
+        } => cmd_audit(&files, strict, no_output, &config, colorize),
         Command::Dict { action } => match action {
             DictAction::Add { term, kind, file } => {
                 cmd_dict_add(&term, &kind, file.as_deref(), &config, colorize)
@@ -452,8 +470,8 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
     lines.join("\n")
 }
 
-/// Indicator report for `mask check` (pure; text output separate).
-pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> String {
+/// Counts per entity type, ordered by label; shared by `check` and `audit`.
+fn type_counts(result: &DetectionResult) -> Vec<(&'static str, usize)> {
     let mut by_type: Vec<(&'static str, usize)> = Vec::new();
     for entity in &result.entities {
         let label = type_ja(entity.kind);
@@ -463,15 +481,25 @@ pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> 
         }
     }
     by_type.sort_by_key(|(name, _)| *name);
-    let summary = if by_type.is_empty() {
-        "  (nothing found — check the dictionary)".to_string()
+    by_type
+}
+
+fn type_summary(by_type: &[(&'static str, usize)], empty: &str) -> String {
+    if by_type.is_empty() {
+        empty.to_string()
     } else {
         let parts: Vec<String> = by_type
             .iter()
             .map(|(name, count)| format!("{name} {count}"))
             .collect();
         format!("  ({})", parts.join(", "))
-    };
+    }
+}
+
+/// Indicator report for `mask check` (pure; text output separate).
+pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> String {
+    let by_type = type_counts(result);
+    let summary = type_summary(&by_type, "  (nothing found — check the dictionary)");
     let lines = [
         format!(
             "  {} detected edge   {} entities{}",
@@ -485,6 +513,55 @@ pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> 
             paint("⟦token⟧", DIM, colorize)
         ),
     ];
+    lines.join("\n")
+}
+
+/// Report for `mask audit` (pure). Locations and counts only: the audited
+/// values never enter the report, so it can be pasted into an issue.
+pub fn render_audit(
+    label: &str,
+    text: &str,
+    result: &DetectionResult,
+    suspicions: &[Suspicion],
+    colorize: bool,
+) -> String {
+    let by_type = type_counts(result);
+    let mut lines = vec![
+        format!(
+            "{} audit           {}  ({} char{})",
+            light(true, colorize),
+            paint(label, DIM, colorize),
+            text.chars().count(),
+            if text.chars().count() == 1 { "" } else { "s" }
+        ),
+        format!(
+            "  entities        {}{}",
+            result.entities.len(),
+            type_summary(&by_type, "  (nothing found — check the dictionary)")
+        ),
+        format!(
+            "{} suspicious      {}{}",
+            light(suspicions.is_empty(), colorize),
+            suspicions.len(),
+            if suspicions.is_empty() {
+                String::new()
+            } else {
+                paint("  (unmasked name before an honorific)", YELLOW, colorize)
+            }
+        ),
+    ];
+    for hint in suspicions.iter().take(20) {
+        lines.push(format!("    line {}", hint.line));
+    }
+    if suspicions.len() > 20 {
+        lines.push(format!("    … {} more", suspicions.len() - 20));
+    }
+    if !suspicions.is_empty() {
+        lines.push(format!(
+            "  next            {} and re-run: the line stays unmasked until then",
+            paint("`mask dict add <term> person`", DIM, colorize)
+        ));
+    }
     lines.join("\n")
 }
 
@@ -533,6 +610,11 @@ fn read_prompt(args: &[String]) -> Option<String> {
     if !args.is_empty() {
         return Some(args.join(" "));
     }
+    read_stdin_text()
+}
+
+/// Read all of stdin when it is a pipe or a file, never when it is a terminal.
+fn read_stdin_text() -> Option<String> {
     let mut stdin = std::io::stdin();
     if stdin.is_terminal() {
         return None;
@@ -555,6 +637,62 @@ fn cmd_check(args: &[String], config: &GatewayConfig, colorize: bool) -> Result<
     eprintln!("{}", paint("[mask check]", DIM, colorize));
     eprintln!("{}", render_check(&masked, &result, colorize));
     Ok(0)
+}
+
+fn cmd_audit(
+    files: &[PathBuf],
+    strict: bool,
+    no_output: bool,
+    config: &GatewayConfig,
+    colorize: bool,
+) -> Result<i32> {
+    let inputs = read_audit_inputs(files)?;
+    let mut session = session_for(config)?;
+    let multiple = inputs.len() > 1;
+    let mut suspicious = 0usize;
+    for (label, text) in &inputs {
+        let (masked, result) = session.masked(text);
+        let hints = scan_suspicions(text, &result);
+        suspicious += hints.len();
+        if !no_output {
+            if multiple {
+                println!("==> {label} <==");
+            }
+            println!("{masked}");
+            if multiple {
+                println!();
+            }
+        }
+        eprintln!("{}", render_audit(label, text, &result, &hints, colorize));
+    }
+    if strict && suspicious > 0 {
+        return Ok(1);
+    }
+    Ok(0)
+}
+
+/// Files plus `-` for stdin, or stdin alone when no path is given.
+fn read_audit_inputs(files: &[PathBuf]) -> Result<Vec<(String, String)>> {
+    if files.is_empty() {
+        let Some(text) = read_stdin_text() else {
+            bail!("no input: name files or pipe text via stdin");
+        };
+        return Ok(vec![("stdin".to_string(), text)]);
+    }
+    let mut inputs: Vec<(String, String)> = Vec::new();
+    for path in files {
+        if path.to_str() == Some("-") {
+            let Some(text) = read_stdin_text() else {
+                bail!("cannot read '-' from a terminal: pipe the text");
+            };
+            inputs.push(("stdin".to_string(), text));
+            continue;
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        inputs.push((path.display().to_string(), text));
+    }
+    Ok(inputs)
 }
 
 /// Where `mask dict ...` reads and writes: `--file`, then `[mask].dictionary`,

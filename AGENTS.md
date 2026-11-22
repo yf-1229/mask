@@ -57,7 +57,7 @@ project. What is off limits is the *operator* side — starting the process,
 reading the secrets, exporting the table, changing the posture.
 
 ```
-agent may:  edit src/, add tests, run cargo test, run `mask check "…"` (no network)
+agent may:  edit src/, add tests, run cargo test, run `mask check "…"` / `mask audit` (no network)
 agent may:  talk to a gateway the human started, as an ordinary API client
 agent must: stop before serve/kill/export/read-secrets/posture-changes, and ask
 ```
@@ -125,7 +125,7 @@ loosen the guard deliberately. Never present a blocked action as done.
   接続・スキャン）、`leak_gate` や `passthrough_allowlist` など保証を緩める変更、
   それらを検証しているテストの削除、`git push` / `cargo publish` / デプロイ。
 - **してよい**: ソースの編集、`cargo fmt` / `clippy` / `test`（自前のモック上流で
-  完結します）、`mask check`（ネットワークなし）、人間が起動したゲートウェイへの
+  完結します）、`mask check` / `mask audit`（ネットワークなし）、人間が起動したゲートウェイへの
   通常の API クライアントとしての接続。
 - **迷ったら**: 実行せず、人間に「これは稼働中のインスタンスに触りますが、
   実行してよいですか」と確認する。ガードで止められた場合は、どのガードに

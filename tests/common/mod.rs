@@ -380,70 +380,78 @@ pub fn text_of(response: &Value) -> String {
 
 // --- canary corpus -----------------------------------------------------------
 
+use std::sync::OnceLock;
+
 use mask::types::EntityType;
 
-/// Known-PII Japanese samples for recall/restore regression. Each sample lists
-/// the entities that MUST be found (recall gate).
+/// Known-PII Japanese samples for recall/restore regression, loaded from
+/// `tests/corpus/canary.txt`. Each sample lists the entities that MUST be found
+/// (recall gate). The corpus is data, not code: adding a case needs no Rust.
 pub struct Canary {
-    pub name: &'static str,
-    pub text: &'static str,
-    pub expected: &'static [(EntityType, &'static str)],
+    pub name: String,
+    pub text: String,
+    pub expected: Vec<(EntityType, String)>,
 }
 
+static CORPUS: OnceLock<Vec<Canary>> = OnceLock::new();
+
 pub fn canaries() -> &'static [Canary] {
-    &[
-        Canary {
-            name: "basic_contact",
-            text: "お問い合わせは 山田太郎 (yamada.taro@example.co.jp, 090-1234-5678) まで。fax は 03-1234-5678 です。",
-            expected: &[
-                (EntityType::Person, "山田太郎"),
-                (EntityType::Email, "yamada.taro@example.co.jp"),
-                (EntityType::Phone, "090-1234-5678"),
-                (EntityType::Phone, "03-1234-5678"),
-            ],
-        },
-        Canary {
-            name: "address_full",
-            text: "配送先は 〒160-0022 東京都新宿区新宿三丁目1番1号 サカエビル203 です。山田太郎様あて。",
-            expected: &[
-                (EntityType::Address, "〒160-0022 東京都新宿区新宿三丁目1番1号"),
-                (EntityType::Person, "山田太郎"),
-            ],
-        },
-        Canary {
-            name: "address_ward_only",
-            text: "詳細住所は港区赤坂一丁目2番3号のマンション103号室です。",
-            expected: &[(EntityType::Address, "港区赤坂一丁目2番3号")],
-        },
-        Canary {
-            name: "bank_account",
-            text: "お振込みは 佐藤花子 (08098761234) の 三菱UFJ銀行 新宿支店 普通 1234567 にお願いします。カード番号は 4242 4242 4242 4242 です。",
-            expected: &[
-                (EntityType::Person, "佐藤花子"),
-                (EntityType::Phone, "08098761234"),
-                (EntityType::Account, "普通 1234567"),
-                (EntityType::Account, "4242 4242 4242 4242"),
-            ],
-        },
-        Canary {
-            name: "multiple_people",
-            text: "山田太郎と佐藤花子が契約者である。山田太郎の勤務先は株式会社ACMEで、連絡先は tanaka@acme.example.jp。",
-            expected: &[
-                (EntityType::Person, "山田太郎"),
-                (EntityType::Person, "佐藤花子"),
-                (EntityType::Org, "株式会社ACME"),
-                (EntityType::Email, "tanaka@acme.example.jp"),
-            ],
-        },
-        Canary {
-            name: "fullwidth",
-            text: "連絡先は ０９０‐１２３４‐５６７８。住所は大阪市北区梅田１丁目２番３号。",
-            expected: &[
-                (EntityType::Phone, "０９０‐１２３４‐５６７８"),
-                (EntityType::Address, "大阪市北区梅田１丁目２番３号"),
-            ],
-        },
-    ]
+    CORPUS.get_or_init(|| parse_corpus(include_str!("../corpus/canary.txt")))
+}
+
+/// Parse the block format:
+///
+/// ```text
+/// # case: name
+/// text: the sentence
+/// person: 山田太郎
+/// phone: 090-1234-5678
+/// ```
+///
+/// Blank lines and `#` comments are ignored; `key: value` splits at the first
+/// colon, so `text:` may itself contain colons.
+pub fn parse_corpus(source: &str) -> Vec<Canary> {
+    let mut cases: Vec<Canary> = Vec::new();
+    let mut current: Option<Canary> = None;
+    for (index, raw) in source.lines().enumerate() {
+        let line = raw.trim();
+        let line_number = index + 1;
+        if line.is_empty() || (line.starts_with('#') && !line.starts_with("# case:")) {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("# case:") {
+            if let Some(case) = current.take() {
+                cases.push(case);
+            }
+            let name = name.trim();
+            assert!(!name.is_empty(), "line {line_number}: empty case name");
+            current = Some(Canary {
+                name: name.to_string(),
+                text: String::new(),
+                expected: Vec::new(),
+            });
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            panic!("line {line_number}: expected `key: value`");
+        };
+        let key = key.trim();
+        let value = value.trim();
+        let case = current
+            .as_mut()
+            .unwrap_or_else(|| panic!("line {line_number}: entry before a `# case:` header"));
+        if key == "text" {
+            case.text = value.to_string();
+            continue;
+        }
+        let kind = EntityType::from_name(key)
+            .unwrap_or_else(|| panic!("line {line_number}: unknown type {key:?}"));
+        case.expected.push((kind, value.to_string()));
+    }
+    if let Some(case) = current.take() {
+        cases.push(case);
+    }
+    cases
 }
 
 /// `(type, value)` pairs for a dictionary that makes the canary corpus

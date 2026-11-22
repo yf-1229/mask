@@ -65,6 +65,22 @@ Windows, macOS and Linux.
   request, deletion of the file not disabling detection, the admin endpoint,
   and the CLI commands
 
+### Seeing your own misses
+
+- New `mask audit [FILES…]` (or stdin): the same detector over whole files, the
+  masked text on stdout, a report on stderr. The report counts entities by type
+  and lists the line numbers of **likely misses** — an unmasked run of 2–4 kanji
+  immediately before an honorific (`鈴木一郎様`), the shape of a personal name the
+  lexicon did not know. Values never enter the report, only line numbers, so it
+  can be pasted into an issue
+- `--strict` exits 1 when a hint exists (a docs CI gate); `--no-output` prints
+  the report without the masked text. Names in kana, and names longer than four
+  characters, are outside this hint — the report says so in the README
+- The canary corpus moved from Rust constants to `tests/corpus/canary.txt`: a
+  block format a contributor can extend without writing code. `tests/corpus.rs`
+  validates the case structure, requires every built-in entity type, and checks
+  that every expected value really occurs in its text
+
 ### Native rewrite
 
 - The Python runtime is gone: `mask` is one self-contained executable
@@ -74,7 +90,8 @@ Windows, macOS and Linux.
   bundled native roots; crypto is pure Rust (argon2, xsalsa20poly1305)
 - NER without a model download: an offline surname lexicon plus a
   given-name extension that stops at honorifics, replacing the spaCy/ja_ginza
-  dependency. Names that matter in an operation belong in `dictionary.tsv`,
+  dependency. The lexicon is data (`src/detect/surnames.txt`, 540+ reviewed
+  surnames), so expanding it is a one-line change rather than a Rust edit Names that matter in an operation belong in `dictionary.tsv`,
   which still outranks the built-in detector on span ties
 - Envelope crypto stays wire-compatible with the previous implementation
   (argon2id + XSalsa20-Poly1305, `nonce‖tag‖ciphertext`), so existing handoff
