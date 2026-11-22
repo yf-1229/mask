@@ -8,9 +8,10 @@
 //! ```
 //!
 //! - `/v1/chat/completions`, non-streaming: full mask/restore.
-//! - `/v1/chat/completions` with `stream=true`: the upstream SSE stream is
-//!   buffered to completion, restored as a whole, and returned as a single SSE
-//!   chunk. Correct but not incremental; incremental restore is future work.
+//! - `/v1/chat/completions` with `stream=true`: each upstream text delta is
+//!   restored as it arrives and forwarded immediately. A token split across
+//!   network chunks is held in a tail buffer until the next chunk completes it
+//!   (or the upstream ends and the tail is flushed).
 //! - `tool_calls` function arguments are masked (JSON strings are parsed and
 //!   every string inside is masked).
 //! - Every other path is refused unless allowlisted in gateway config (deny by
@@ -32,6 +33,7 @@ pub use config::{GatewayConfig, LeakGate, SessionScope};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
@@ -41,19 +43,23 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode}
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::{Stream, StreamExt};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::detect::dictionary::{MergeReport, UserDictionary};
 use crate::gateway::agent::{
-    anthropic_stream_events, anthropic_to_openai, openai_to_anthropic, restored_strings,
+    anthropic_block_stop, anthropic_stream_end, anthropic_stream_start, anthropic_text_block_start,
+    anthropic_text_delta, anthropic_to_openai, anthropic_tool_block, finish_reason,
+    openai_to_anthropic, restored_strings,
 };
 use crate::gateway::indicators::{
     build_posture, request_headers, Count, Indicators, RequestMeasure,
 };
 use crate::gateway::leakguard::{find_header_leaks, find_leaks, Leak};
 use crate::gateway::sharing::{envelope_fingerprint, seal_with, unseal, Envelope, UnsealError};
+use crate::restore::restore_stream_buffer;
 use crate::session::Session;
 
 /// Request headers never forwarded upstream: the client's Authorization is a
@@ -861,7 +867,7 @@ async fn chat_completions(State(state): State<AppState>, request: Request) -> Re
     let url = state.config.upstream_url("chat/completions");
     if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
         state.indicators.incr(Count::StreamRequests);
-        return proxy_streaming(&state, &masked, &headers, &url, ENTRY_OPENAI).await;
+        return proxy_streaming(&state, &masked, &headers, &url, ENTRY_OPENAI, measure).await;
     }
 
     let upstream =
@@ -972,75 +978,7 @@ async fn messages(State(state): State<AppState>, request: Request) -> Response {
         .unwrap_or(false)
     {
         state.indicators.incr(Count::StreamRequests);
-        let chunks = match collect_chat_stream(&state, &masked, &headers, &url).await {
-            Ok(Collected::Chunks(chunks)) => chunks,
-            Ok(Collected::Error {
-                status,
-                body,
-                content_type,
-            }) => return body_response(status, body, content_type),
-            Err(response) => return response,
-        };
-        let restored_text =
-            state.with_session(|session| restore_text(&chunks.text, session, &mut measure));
-        let tool_uses: Vec<Value> = state.with_session(|session| {
-            chunks
-                .tool_calls
-                .iter()
-                .map(|call| {
-                    let function = call.get("function").cloned().unwrap_or(Value::Null);
-                    let raw_args = function
-                        .get("arguments")
-                        .and_then(Value::as_str)
-                        .unwrap_or("{}");
-                    let args: Value = serde_json::from_str(raw_args)
-                        .unwrap_or_else(|_| json!({"_raw": raw_args}));
-                    let input = restored_strings(&args, session, &mut measure);
-                    let mut use_block = Map::new();
-                    use_block.insert(
-                        "id".to_string(),
-                        call.get("id")
-                            .cloned()
-                            .unwrap_or_else(|| json!("toolu_mask")),
-                    );
-                    use_block.insert(
-                        "name".to_string(),
-                        function.get("name").cloned().unwrap_or_else(|| json!("")),
-                    );
-                    use_block.insert("input".to_string(), input);
-                    Value::Object(use_block)
-                })
-                .collect()
-        });
-        let stop_reason = if tool_uses.is_empty() {
-            "end_turn"
-        } else {
-            "tool_use"
-        };
-        let message = json!({
-            "id": chunks.meta.get("id").cloned().unwrap_or_else(|| json!("msg_mask")),
-            "type": "message",
-            "role": "assistant",
-            "model": chunks.meta.get("model").cloned()
-                .or_else(|| body.get("model").cloned())
-                .unwrap_or_else(|| json!("")),
-            "content": [],
-            "stop_reason": stop_reason,
-            "stop_sequence": Value::Null,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        });
-        record_measure(&state, &measure);
-        let events = anthropic_stream_events(&message, &restored_text, &tool_uses);
-        let mut response = Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/event-stream")
-            .body(Body::from(events))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-        response = with_headers(
-            response,
-            &request_headers(&measure, &state.config, ENTRY_ANTHROPIC),
-        );
-        return response;
+        return proxy_streaming(&state, &masked, &headers, &url, ENTRY_ANTHROPIC, measure).await;
     }
 
     let upstream =
@@ -1526,201 +1464,430 @@ async fn passthrough(State(state): State<AppState>, request: Request) -> Respons
 
 // --- streaming ---------------------------------------------------------------
 
-/// Metadata + restored payload collected from a buffered upstream SSE stream.
-pub struct Chunks {
-    pub meta: Map<String, Value>,
-    pub text: String,
-    pub tool_calls: Vec<Value>,
-}
-
-pub enum Collected {
-    Chunks(Chunks),
-    Error {
-        status: StatusCode,
-        body: Bytes,
-        content_type: Option<String>,
-    },
-}
-
-/// Buffer an upstream OpenAI SSE stream to completion.
+/// Incremental restorer for one upstream OpenAI SSE stream.
 ///
-/// Tool-call fragments are stitched by index so the merged arguments JSON
-/// survives chunk boundaries; masking already happened upstream of this.
-#[allow(clippy::result_large_err)]
-async fn collect_chat_stream(
-    state: &AppState,
-    masked_body: &Value,
-    headers: &[(String, String)],
-    url: &str,
-) -> Result<Collected, Response> {
-    let upstream =
-        send_upstream(state, Method::POST, url, headers, Some(masked_body), None).await?;
-    let status = upstream.status();
-    let content_type = upstream
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let bytes = upstream.bytes().await.map_err(|error| {
-        tracing::error!(%error, "cannot read upstream stream");
-        error_response(
-            StatusCode::BAD_GATEWAY,
-            "mask_upstream_error",
-            "cannot read upstream stream",
-        )
-    })?;
-    if !status.is_success() {
-        return Ok(Collected::Error {
-            status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            body: bytes,
-            content_type,
+/// Both entrances translate to OpenAI chat for the upstream; this state
+/// machine reads whatever byte boundaries the network gives it, restores the
+/// text deltas, and renders the downstream protocol as it goes. The undecided
+/// tail lives in `pending`: [`restore_stream_buffer`] returns only the prefix
+/// that cannot be part of a token completed by a later chunk. At upstream EOF
+/// [`Self::finish`] flushes it and emits the terminal events.
+struct StreamRestorer {
+    app: AppState,
+    upstream: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    byte_buf: Vec<u8>,
+    pending: String,
+    session: Session,
+    measure: RequestMeasure,
+    /// `true` renders Anthropic events; `false` renders OpenAI SSE chunks.
+    anthropic: bool,
+    /// Fallback model for `message_start` when the upstream omits it.
+    model: String,
+    meta: Map<String, Value>,
+    tool_calls: BTreeMap<i64, Value>,
+    finish_reason: Option<String>,
+    /// Whether the OpenAI role delta / Anthropic text block has been opened.
+    started: bool,
+    message_started: bool,
+    text_block_open: bool,
+    done: bool,
+}
+
+impl StreamRestorer {
+    fn into_body(self) -> Body {
+        let stream = futures_util::stream::unfold(self, |mut restorer| async move {
+            loop {
+                if restorer.done {
+                    return None;
+                }
+                match restorer.upstream.next().await {
+                    Some(Ok(bytes)) => {
+                        let out = restorer.on_bytes(&bytes);
+                        if !out.is_empty() {
+                            return Some((Ok::<Bytes, std::io::Error>(Bytes::from(out)), restorer));
+                        }
+                    }
+                    Some(Err(error)) => {
+                        // The status line is long gone; the honest signal is a
+                        // truncated body (no finish event), not a 502 after 200.
+                        tracing::error!(%error, "cannot read upstream stream");
+                        restorer.done = true;
+                        let out = restorer.flush_pending();
+                        if out.is_empty() {
+                            return None;
+                        }
+                        return Some((Ok(Bytes::from(out)), restorer));
+                    }
+                    None => {
+                        restorer.done = true;
+                        let out = restorer.finish();
+                        if out.is_empty() {
+                            return None;
+                        }
+                        return Some((Ok(Bytes::from(out)), restorer));
+                    }
+                }
+            }
         });
+        Body::from_stream(stream)
     }
 
-    let mut meta: Map<String, Value> = Map::new();
-    let mut text = String::new();
-    let mut tool_calls: BTreeMap<i64, Value> = BTreeMap::new();
+    fn on_bytes(&mut self, bytes: &[u8]) -> String {
+        self.byte_buf.extend_from_slice(bytes);
+        let mut out = String::new();
+        while let Some(line) = take_line(&mut self.byte_buf) {
+            self.on_line(&line, &mut out);
+        }
+        out
+    }
 
-    let raw = String::from_utf8_lossy(&bytes);
-    for line in raw.split('\n') {
-        let line = line.trim_end_matches('\r');
+    fn on_line(&mut self, line: &str, out: &mut String) {
         let Some(payload) = line.strip_prefix("data:") else {
-            continue;
+            return;
         };
         let payload = payload.trim();
         if payload == "[DONE]" {
-            break;
+            return;
         }
         let Ok(chunk) = serde_json::from_str::<Value>(payload) else {
-            continue;
+            return;
         };
+        self.on_chunk(&chunk, out);
+    }
+
+    fn on_chunk(&mut self, chunk: &Value, out: &mut String) {
         for key in ["id", "object", "created", "model", "system_fingerprint"] {
             if let Some(value) = chunk.get(key) {
                 if !value.is_null() {
-                    meta.entry(key.to_string()).or_insert_with(|| value.clone());
+                    self.meta
+                        .entry(key.to_string())
+                        .or_insert_with(|| value.clone());
                 }
             }
         }
         if let Some(choices) = chunk.get("choices").and_then(Value::as_array) {
             for choice in choices {
+                if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+                    if !reason.is_empty() {
+                        self.finish_reason = Some(reason.to_string());
+                    }
+                }
                 let Some(delta) = choice.get("delta") else {
                     continue;
                 };
                 if let Some(content) = delta.get("content").and_then(Value::as_str) {
-                    text.push_str(content);
+                    self.feed_text(content, out);
                 }
-                let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) else {
-                    continue;
-                };
-                for call in calls {
-                    let index = call.get("index").and_then(Value::as_i64).unwrap_or(0);
-                    let entry = tool_calls
-                        .entry(index)
-                        .or_insert_with(|| json!({"id": "", "type": "function", "function": {}}));
-                    if let Some(id) = call.get("id").and_then(Value::as_str) {
-                        entry["id"] = json!(id);
-                    }
-                    if let Some(function) = call.get("function") {
-                        if let Some(name) = function.get("name").and_then(Value::as_str) {
-                            entry["function"]["name"] = json!(name);
-                        }
-                        if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
-                            let existing = entry["function"]
-                                .get("arguments")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            entry["function"]["arguments"] =
-                                json!(format!("{existing}{arguments}"));
-                        }
-                    }
+                if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+                    merge_tool_deltas(&mut self.tool_calls, calls);
                 }
             }
         }
+        self.ensure_message_start(out);
     }
 
-    let merged: Vec<Value> = tool_calls
-        .into_values()
+    fn feed_text(&mut self, text: &str, out: &mut String) {
+        self.pending.push_str(text);
+        let (safe, keep) = restore_stream_buffer(&self.pending);
+        self.pending = keep;
+        self.emit_masked(&safe, out);
+    }
+
+    fn flush_pending(&mut self) -> String {
+        let mut out = String::new();
+        let pending = std::mem::take(&mut self.pending);
+        self.emit_masked(&pending, &mut out);
+        out
+    }
+
+    fn emit_masked(&mut self, masked: &str, out: &mut String) {
+        if masked.is_empty() {
+            return;
+        }
+        let restored = self.session.unmasked(masked);
+        self.measure.observe_restore(&restored);
+        for warning in &restored.warnings {
+            tracing::warn!("restore: {warning}");
+        }
+        if restored.text.is_empty() {
+            return;
+        }
+        if self.anthropic {
+            self.emit_anthropic_text(&restored.text, out);
+        } else {
+            self.emit_openai_text(&restored.text, out);
+        }
+    }
+
+    fn emit_openai_text(&mut self, text: &str, out: &mut String) {
+        let delta = if self.started {
+            json!({"content": text})
+        } else {
+            self.started = true;
+            json!({"role": "assistant", "content": text})
+        };
+        out.push_str(&self.openai_chunk(delta, Value::Null));
+    }
+
+    fn emit_anthropic_text(&mut self, text: &str, out: &mut String) {
+        self.ensure_message_start(out);
+        if !self.text_block_open {
+            self.text_block_open = true;
+            out.push_str(&anthropic_text_block_start(0));
+        }
+        out.push_str(&anthropic_text_delta(0, text));
+    }
+
+    fn ensure_message_start(&mut self, out: &mut String) {
+        if !self.anthropic || self.message_started {
+            return;
+        }
+        self.message_started = true;
+        let id = self
+            .meta
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("msg_mask")
+            .to_string();
+        let model = self
+            .meta
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.model)
+            .to_string();
+        out.push_str(&anthropic_stream_start(&id, &model));
+    }
+
+    fn openai_chunk(&self, delta: Value, finish: Value) -> String {
+        let mut chunk = self.meta.clone();
+        chunk.insert("object".to_string(), json!("chat.completion.chunk"));
+        chunk.insert(
+            "choices".to_string(),
+            json!([{"index": 0, "delta": delta, "finish_reason": finish}]),
+        );
+        sse_line(Value::Object(chunk))
+    }
+
+    fn finish(&mut self) -> String {
+        let mut out = String::new();
+        if !self.byte_buf.is_empty() {
+            let tail = std::mem::take(&mut self.byte_buf);
+            let line = String::from_utf8_lossy(&tail)
+                .trim_end_matches(['\r', '\n'])
+                .to_string();
+            self.on_line(&line, &mut out);
+        }
+        out.push_str(&self.flush_pending());
+        if self.anthropic {
+            self.finish_anthropic(&mut out);
+        } else {
+            self.finish_openai(&mut out);
+        }
+        out
+    }
+
+    fn finish_openai(&mut self, out: &mut String) {
+        let calls = merged_tool_calls(&self.tool_calls);
+        let has_calls = !calls.is_empty();
+        if !self.started {
+            self.started = true;
+            out.push_str(
+                &self.openai_chunk(json!({"role": "assistant", "content": ""}), Value::Null),
+            );
+        }
+        if has_calls {
+            out.push_str(&self.openai_chunk(json!({"tool_calls": calls}), Value::Null));
+        }
+        let reason = self
+            .finish_reason
+            .clone()
+            .unwrap_or_else(|| if has_calls { "tool_calls" } else { "stop" }.to_string());
+        out.push_str(&self.openai_chunk(json!({}), json!(reason)));
+        out.push_str("data: [DONE]\n\n");
+    }
+
+    fn finish_anthropic(&mut self, out: &mut String) {
+        self.ensure_message_start(out);
+        let mut index = 0usize;
+        if self.text_block_open {
+            self.text_block_open = false;
+            out.push_str(&anthropic_block_stop(0));
+            index = 1;
+        }
+        let calls = merged_tool_calls(&self.tool_calls);
+        let tool_uses: Vec<Value> = calls
+            .iter()
+            .map(|call| restored_tool_use(call, &mut self.session, &mut self.measure))
+            .collect();
+        for call in &tool_uses {
+            out.push_str(&anthropic_tool_block(index, call));
+            index += 1;
+        }
+        let mut stop = finish_reason(self.finish_reason.as_deref());
+        if !tool_uses.is_empty() {
+            stop = "tool_use";
+        }
+        out.push_str(&anthropic_stream_end(
+            stop,
+            json!({"input_tokens": 0, "output_tokens": 0}),
+        ));
+    }
+}
+
+impl Drop for StreamRestorer {
+    fn drop(&mut self) {
+        // Headers were already sent, so the cumulative indicator counters are
+        // the only place where the tail's restore counts can land. This also
+        // runs when the client disconnects mid-stream.
+        record_measure(&self.app, &self.measure);
+    }
+}
+
+fn take_line(buf: &mut Vec<u8>) -> Option<String> {
+    let newline = buf.iter().position(|&b| b == b'\n')?;
+    let line: Vec<u8> = buf.drain(..=newline).collect();
+    Some(
+        String::from_utf8_lossy(&line)
+            .trim_end_matches(['\r', '\n'])
+            .to_string(),
+    )
+}
+
+fn merge_tool_deltas(tool_calls: &mut BTreeMap<i64, Value>, calls: &[Value]) {
+    for call in calls {
+        let index = call.get("index").and_then(Value::as_i64).unwrap_or(0);
+        let entry = tool_calls
+            .entry(index)
+            .or_insert_with(|| json!({"id": "", "type": "function", "function": {}}));
+        if let Some(id) = call.get("id").and_then(Value::as_str) {
+            entry["id"] = json!(id);
+        }
+        let Some(function) = call.get("function") else {
+            continue;
+        };
+        if let Some(name) = function.get("name").and_then(Value::as_str) {
+            entry["function"]["name"] = json!(name);
+        }
+        if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+            let existing = entry["function"]
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            entry["function"]["arguments"] = json!(format!("{existing}{arguments}"));
+        }
+    }
+}
+
+fn merged_tool_calls(tool_calls: &BTreeMap<i64, Value>) -> Vec<Value> {
+    tool_calls
+        .values()
         .filter(|call| {
             call["function"].get("name").is_some() || call["function"].get("arguments").is_some()
         })
-        .collect();
+        .cloned()
+        .collect()
+}
 
-    Ok(Collected::Chunks(Chunks {
-        meta,
-        text,
-        tool_calls: merged,
-    }))
+/// Restore a stitched OpenAI tool call into an Anthropic `tool_use` block.
+fn restored_tool_use(call: &Value, session: &mut Session, measure: &mut RequestMeasure) -> Value {
+    let function = call.get("function").cloned().unwrap_or(Value::Null);
+    let raw_args = function
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
+    let args: Value = serde_json::from_str(raw_args).unwrap_or_else(|_| json!({"_raw": raw_args}));
+    json!({
+        "id": call.get("id").cloned().unwrap_or_else(|| json!("toolu_mask")),
+        "name": function.get("name").cloned().unwrap_or_else(|| json!("")),
+        "input": restored_strings(&args, session, measure),
+    })
 }
 
 fn sse_line(payload: Value) -> String {
     format!("data: {payload}\n\n")
 }
 
-/// Buffer the upstream SSE stream, restore it whole, emit OpenAI chunks.
+/// Stream one upstream SSE response, restoring text as it arrives.
+///
+/// HTTP status is settled before the body is handed downstream: a non-success
+/// upstream is still a normal error response with its body, and an unreachable
+/// upstream is still a 502. Only a body-read failure after the 200 is reported
+/// by truncating the stream (the status can no longer be rewritten).
 async fn proxy_streaming(
     state: &AppState,
     masked_body: &Value,
     headers: &[(String, String)],
     url: &str,
-    entry: &str,
+    entry: &'static str,
+    measure: RequestMeasure,
 ) -> Response {
-    let mut measure = RequestMeasure::default();
-    let collected = match collect_chat_stream(state, masked_body, headers, url).await {
-        Ok(collected) => collected,
-        Err(response) => return response,
-    };
-    let chunks = match collected {
-        Collected::Chunks(chunks) => chunks,
-        Collected::Error {
-            status,
-            body,
+    let upstream =
+        match send_upstream(state, Method::POST, url, headers, Some(masked_body), None).await {
+            Ok(upstream) => upstream,
+            Err(response) => return response,
+        };
+    let status = upstream.status();
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    if !status.is_success() {
+        let bytes = match upstream.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, "cannot read upstream stream");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "mask_upstream_error",
+                    "cannot read upstream stream",
+                );
+            }
+        };
+        return body_response(
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            bytes,
             content_type,
-        } => return body_response(status, body, content_type),
-    };
-
-    let restored = state.with_session(|session| restore_text(&chunks.text, session, &mut measure));
-    record_measure(state, &measure);
-
-    let mut meta = chunks.meta.clone();
-    meta.insert("object".to_string(), json!("chat.completion.chunk"));
-    let finish_reason = if chunks.tool_calls.is_empty() {
-        "stop"
-    } else {
-        "tool_calls"
-    };
-    let mut delta = Map::new();
-    delta.insert("role".to_string(), json!("assistant"));
-    delta.insert("content".to_string(), json!(restored));
-    if !chunks.tool_calls.is_empty() {
-        delta.insert(
-            "tool_calls".to_string(),
-            Value::Array(chunks.tool_calls.clone()),
         );
     }
-    let mut first = meta.clone();
-    first.insert(
-        "choices".to_string(),
-        json!([{"index": 0, "delta": delta, "finish_reason": Value::Null}]),
-    );
-    let mut last = meta;
-    last.insert(
-        "choices".to_string(),
-        json!([{"index": 0, "delta": {}, "finish_reason": finish_reason}]),
-    );
 
-    let mut body = String::new();
-    body.push_str(&sse_line(Value::Object(first)));
-    body.push_str(&sse_line(Value::Object(last)));
-    body.push_str("data: [DONE]\n\n");
-
-    let mut response = Response::builder()
+    // One session snapshot for the whole stream: the mapping table cannot
+    // change under a response, and a request-scoped session must not be
+    // re-created per chunk.
+    let session = state.with_session(|session| session.clone());
+    let model = masked_body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let upstream: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>> =
+        Box::pin(upstream.bytes_stream());
+    let restorer = StreamRestorer {
+        app: state.clone(),
+        upstream,
+        byte_buf: Vec::new(),
+        pending: String::new(),
+        session,
+        measure,
+        anthropic: entry == ENTRY_ANTHROPIC,
+        model,
+        meta: Map::new(),
+        tool_calls: BTreeMap::new(),
+        finish_reason: None,
+        started: false,
+        message_started: false,
+        text_block_open: false,
+        done: false,
+    };
+    let response_headers = request_headers(&restorer.measure, &state.config, entry);
+    let body = restorer.into_body();
+    let response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
-        .body(Body::from(body))
+        .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-    response = with_headers(response, &request_headers(&measure, &state.config, entry));
-    response
+    with_headers(response, &response_headers)
 }
 
 // --- server ------------------------------------------------------------------

@@ -215,6 +215,41 @@ async fn messages_stream_emits_the_anthropic_event_sequence() {
 }
 
 #[tokio::test]
+async fn messages_stream_restores_a_token_split_across_chunks() {
+    let config = GatewayConfig {
+        dictionary_path: Some(common::dict_file(&[("山田太郎", "person")])),
+        ..base_config()
+    };
+    let h = start_with(config, MockKind::SplitInside).await;
+    let mut body = messages_body("山田太郎さん");
+    body["stream"] = json!(true);
+    let response = h.post_json("/v1/messages", body).await;
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    assert!(text.contains("山田太郎"), "{text}");
+    assert!(!text.contains('⟦'), "{text}");
+    let events: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .collect();
+    let delta = events
+        .iter()
+        .find(|value| value["type"] == "content_block_delta")
+        .expect("content_block_delta");
+    assert!(delta["delta"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("山田太郎"));
+    let stop = events
+        .iter()
+        .find(|value| value["type"] == "message_delta")
+        .expect("message_delta");
+    assert_eq!(stop["delta"]["stop_reason"], "end_turn");
+    assert!(text.contains("event: message_stop"), "{text}");
+}
+
+#[tokio::test]
 async fn messages_gateway_token_via_x_api_key() {
     let config = GatewayConfig {
         gateway_token: "team-secret".to_string(),

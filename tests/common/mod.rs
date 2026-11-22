@@ -29,6 +29,15 @@ pub enum MockKind {
     /// Echo text, and emit a tool_call echoing the first token when the
     /// request declares tools (agent flow).
     Agent,
+    /// Streaming split after the opening token bracket (`⟦`).
+    SplitAfterOpen,
+    /// Streaming split in the middle of the first token.
+    SplitInside,
+    /// Streaming split immediately before the closing token bracket (`⟧`).
+    SplitBeforeClose,
+    /// Streaming, first token-sized chunk then a delayed second chunk. Used to
+    /// prove the gateway does not wait for upstream completion.
+    SlowStream,
 }
 
 #[derive(Clone, Debug)]
@@ -220,26 +229,78 @@ fn message_texts(body: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn sse_line(delta: &Value, model: &str) -> String {
+    let chunk = json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": Value::Null}],
+    });
+    format!("data: {chunk}\n\n")
+}
+
 fn sse(chunks: &[Value], model: &str) -> Response {
-    let mut lines: Vec<String> = Vec::new();
+    let mut body = String::new();
     for delta in chunks {
-        let chunk = json!({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": Value::Null}],
-        });
-        lines.push(format!("data: {chunk}"));
+        body.push_str(&sse_line(delta, model));
     }
-    lines.push("data: [DONE]".to_string());
-    let body = format!("{}\n\n", lines.join("\n\n"));
+    body.push_str("data: [DONE]\n\n");
     (
         StatusCode::OK,
         [("content-type", "text/event-stream")],
         body,
     )
         .into_response()
+}
+
+/// One delayed event after the first: enough for two separate reads on the
+/// gateway's upstream connection, which is what makes the split real.
+fn sse_delayed(chunks: Vec<Value>, model: &str, delay: std::time::Duration) -> Response {
+    let mut parts: Vec<String> = chunks.iter().map(|d| sse_line(d, model)).collect();
+    parts.push("data: [DONE]\n\n".to_string());
+    let stream = futures_util::stream::unfold((parts, 0usize), move |(parts, index)| async move {
+        if index >= parts.len() {
+            return None;
+        }
+        if index == 1 {
+            tokio::time::sleep(delay).await;
+        }
+        let out = parts[index].clone();
+        Some((
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(out)),
+            (parts, index + 1),
+        ))
+    });
+    (
+        StatusCode::OK,
+        [("content-type", "text/event-stream")],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// Byte offset to split the masked streamed content at, for the split mocks.
+fn split_point(content: &str, kind: MockKind) -> usize {
+    let open = content.find('⟦');
+    let close = content.find('⟧');
+    match (kind, open, close) {
+        (MockKind::SplitAfterOpen, Some(open), _) => open + '⟦'.len_utf8(),
+        (MockKind::SplitBeforeClose, _, Some(close)) => close,
+        (MockKind::SplitInside, Some(open), Some(close)) => {
+            let inner = &content[open..close];
+            inner
+                .char_indices()
+                .nth(2)
+                .map(|(offset, _)| open + offset)
+                .unwrap_or(close)
+        }
+        _ => content
+            .char_indices()
+            .nth(1)
+            .map(|(offset, _)| offset)
+            .unwrap_or(content.len()),
+    }
 }
 
 fn upstream_response(kind: MockKind, body: &Value) -> Response {
@@ -263,15 +324,40 @@ fn upstream_response(kind: MockKind, body: &Value) -> Response {
     };
 
     if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
-        let head: String = content.chars().take(3).collect();
-        let tail: String = content.chars().skip(3).collect();
-        return sse(
-            &[
-                json!({"role": "assistant", "content": head}),
-                json!({"content": tail}),
-            ],
-            &model,
-        );
+        let (head, tail) = match kind {
+            MockKind::SplitAfterOpen | MockKind::SplitInside | MockKind::SplitBeforeClose => {
+                let at = split_point(&content, kind);
+                (content[..at].to_string(), content[at..].to_string())
+            }
+            MockKind::SlowStream => {
+                // Split at the first complete token so the first chunk is
+                // immediately restorable and the delay proves incremental send.
+                let at = content
+                    .find('⟧')
+                    .map(|index| index + '⟧'.len_utf8())
+                    .unwrap_or_else(|| content.len());
+                (content[..at].to_string(), content[at..].to_string())
+            }
+            _ => {
+                let head: String = content.chars().take(3).collect();
+                let tail: String = content.chars().skip(3).collect();
+                return sse(
+                    &[
+                        json!({"role": "assistant", "content": head}),
+                        json!({"content": tail}),
+                    ],
+                    &model,
+                );
+            }
+        };
+        let chunks = vec![
+            json!({"role": "assistant", "content": head}),
+            json!({"content": tail}),
+        ];
+        return match kind {
+            MockKind::SlowStream => sse_delayed(chunks, &model, std::time::Duration::from_secs(2)),
+            _ => sse_delayed(chunks, &model, std::time::Duration::from_millis(20)),
+        };
     }
 
     if kind == MockKind::Agent && body.get("tools").is_some() {

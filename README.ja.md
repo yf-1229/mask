@@ -49,8 +49,10 @@ English README: [README.md](README.md) ／ 公式サイト: **https://mask.branc
 - `tools` / `tool_use` / `tool_result` を含むエージェントループを翻訳。
   ツール引数はローカル実行のため**復元して**返します。ツール結果は
   次のターンで他の入力と同様にマスクされます
-- `stream: true` は上流をバッファして復元し、正しい Anthropic SSE
-  イベント列として返します (正確だが逐次ではない。逐次復元は未実装)
+- `stream: true` は上流のテキスト差分を到着ごとに復元し、Anthropic SSE
+  イベント列を逐次返します。チャンク境界で分かれたトークンは次チャンクで
+  完成するまで保持し、上流終了時に残りをフラッシュしてから `message_stop`
+  (OpenAI 経路は `finish_reason`) で閉じます
 - 認証は `Authorization: Bearer` と `x-api-key` の両スロットで受け付けます
 
 ### シェル入口 (`mask` コマンド)
@@ -409,9 +411,6 @@ status_public = false        # /status インジケータの公開 (数字のみ
 
 ## 現在の制限
 
-- `stream: true` は動作するが、upstream のストリームを全件バッファしてから
-  復元済みで返す (OpenAI互換は 1 チャンク、Anthropic互換は正しいイベント列)。
-  正確だが逐次ではない。逐次復元は Phase B。
 - Anthropic互換入口はテキスト・ツール系ブロックを翻訳。画像・thinking 等の
   未対応ブロックは破棄します (デフォルト拒否)。
 - allowlist に追加したパスはマスクされずそのまま通る (リークゲートは効く)。

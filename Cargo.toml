@@ -26,11 +26,13 @@ argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 getrandom = "0.2"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls-native-roots-no-provider",
+  "stream",
 ] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }

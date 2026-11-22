@@ -51,8 +51,10 @@ The Anthropic Messages protocol is accepted in a model-agnostic way:
 - `tools` / `tool_use` / `tool_result` agent loops are translated. Tool
   arguments are **restored** because they execute locally; tool results are
   masked on the next turn like any other input
-- `stream: true` buffers the upstream response, restores it, and emits a correct
-  Anthropic SSE event sequence (accurate, not incremental)
+- `stream: true` restores each upstream text delta as it arrives and emits the
+  Anthropic SSE event sequence incrementally. A token split across chunks is
+  held until the next chunk completes it; the tail is flushed at upstream EOF,
+  then `message_stop` (or the OpenAI `finish_reason`) closes the stream
 - Authentication accepts both `Authorization: Bearer` and `x-api-key`
 
 ### Shell entrance (`mask` command)
@@ -431,9 +433,6 @@ Dictionary types: `person` / `org` / `location` / `address` / `phone` / `email` 
 
 ## Current limitations
 
-- `stream: true` works, but the upstream stream is fully buffered before the
-  restored response is returned (one chunk for OpenAI-compatible, a correct event
-  sequence for Anthropic-compatible). Accurate, not incremental
 - The Anthropic-compatible entrance translates text and tool blocks. Unsupported
   blocks (images, thinking, …) are dropped — deny by default
 - Built-in name detection is lexicon-based, not statistical: unfamiliar names and
