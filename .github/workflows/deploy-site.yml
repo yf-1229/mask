@@ -16,6 +16,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "scripts/install.sh"
       - "wrangler.jsonc"
       - ".github/workflows/deploy-site.yml"
   workflow_dispatch:
@@ -33,6 +34,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Stage install.sh
+        # https://mask.branchead.com/install.sh is what the README tells people
+        # to pipe into sh, so it is served from here — copied from the one copy
+        # in the repository rather than maintained twice.
+        run: cp scripts/install.sh site/install.sh
 
       - name: Check for credentials
         id: creds

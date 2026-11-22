@@ -72,3 +72,24 @@ jobs:
         run: |
           cargo run --quiet -- --version
           cargo run --quiet -- --no-color check "山田太郎さんと090-1234-5678の件"
+
+  packaging:
+    name: deb + install.sh
+    runs-on: ubuntu-latest
+    # The release pipeline is code too: a .deb whose metadata lies, or an
+    # install script that accepted a bad checksum, would be discovered by users.
+    # scripts/install-test.sh runs both against a local mirror — no network — and
+    # the runner is the one host where installing the package to check it is free.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the release binary
+        run: cargo build --release --locked
+
+      - name: Install the deb and run install.sh
+        run: sudo MASK_TEST_DPKG_INSTALL=1 sh scripts/install-test.sh
