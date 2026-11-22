@@ -7,6 +7,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -342,14 +343,30 @@ pub fn temp_file(name: &str, content: &str) -> PathBuf {
     path
 }
 
+/// Distinguishes calls that land in the same clock tick. Windows'
+/// `SystemTime::now()` resolution is coarse enough that parallel tests have
+/// seen the same nanosecond; pid+nanos alone then made two tests share one
+/// temporary dictionary, and the later write won (`dictionary_terms` 1
+/// instead of 2).
+static DICT_FILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn dict_file_path(nanos: u128) -> PathBuf {
+    let seq = DICT_FILE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "mask-test-{}-{nanos}-{seq}.tsv",
+        std::process::id()
+    ));
+    path
+}
+
 /// Write a temporary dictionary file (TSV) and return its path.
 pub fn dict_file<S: AsRef<str>, T: AsRef<str>>(terms: &[(S, T)]) -> PathBuf {
-    let mut name = std::env::temp_dir();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    name.push(format!("mask-test-{}-{nanos}.tsv", std::process::id()));
+    let name = dict_file_path(nanos);
     let content = terms
         .iter()
         .map(|(term, kind)| format!("{}\t{}", term.as_ref(), kind.as_ref()))
@@ -462,4 +479,16 @@ pub fn canary_terms() -> Vec<(String, String)> {
         .flat_map(|c| c.expected.iter())
         .map(|(kind, value)| (value.to_string(), kind.as_str().to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dict_file_paths_differ_within_the_same_clock_tick() {
+        // Two calls with the same clock reading must not share a path; the
+        // counter is what keeps parallel tests from overwriting each other.
+        assert_ne!(dict_file_path(1), dict_file_path(1));
+    }
 }
