@@ -27,6 +27,26 @@ Only the latest release is supported; fixes land on `main` and ship in the next
 tag. Prebuilt binaries for Windows, macOS and Linux are built from that same tag
 in CI, so what you run is what was tested.
 
+## Verifying a download
+
+The release pipeline publishes one `SHA256SUMS` covering every asset it uploads,
+and both front doors check against it:
+
+- `scripts/install.sh` downloads `mask-<target>` and refuses to install when the
+  sums are missing or do not match. `--no-verify` is the deliberate override, and
+  it says out loud that nothing was checked
+- the `.deb` is packaged from that same file, with no strip or relink step in
+  between — the packaging test asserts the unpacked payload is byte-identical to
+  the binary it was given. Its `Depends` is read from the glibc symbols that
+  binary imports, so an old distribution refuses the package instead of
+  installing a binary that cannot start. A package downloaded by hand can be
+  checked with `sha256sum -c SHA256SUMS --ignore-missing`
+
+What neither can protect you from is the install script itself: `curl … | sh`
+trusts the first response. Read it (it is a few hundred lines of POSIX `sh`), run
+`sh install.sh --dry-run` first, or install the `.deb` and let `apt` record what
+changed.
+
 ## What mask guarantees
 
 For a value the session has **detected**:

@@ -434,7 +434,7 @@
 
       <div class="actions">
         <a class="btn" href="#start">動かしてみる</a>
-        <a class="link" href="https://github.com/yf-1229/mask/releases">ビルド済みバイナリを取得 ↗</a>
+        <a class="link" href="https://github.com/yf-1229/mask/releases">リリース（deb・バイナリ）↗</a>
       </div>
 
       <p class="meta">
@@ -446,19 +446,26 @@
 
     <section id="start">
       <h2>使い方は3つだけ</h2>
-      <p class="sub">Rust ツールチェーンか、リリースのバイナリだけ。上流の API キーは手元に置いたままです。</p>
+      <p class="sub">ツールチェーンがなくても入ります。上流の API キーは手元に置いたままです。</p>
 
       <ol class="steps">
         <li class="step">
           <div>
-            <h3>起動する</h3>
-            <pre><code>cargo build --release
+            <h3>入れて、起動する</h3>
+            <pre><code><span class="c"># Debian / Ubuntu</span>
+curl -fsSLO https://github.com/yf-1229/mask/releases/latest/download/mask_amd64.deb
+sudo apt install ./mask_amd64.deb
+
+<span class="c"># Linux / macOS はこれ1行</span>
+curl -fsSL https://mask.branchead.com/install.sh | sh
+
 <span class="c"># 設定はチェックアウトの外へ（上流キーが入るため）</span>
 mkdir -p ~/.config/mask
-cp mask.toml.example ~/.config/mask/mask.toml
+curl -fsSL https://raw.githubusercontent.com/yf-1229/mask/main/mask.toml.example \
+  -o ~/.config/mask/mask.toml
 chmod 600 ~/.config/mask/mask.toml
 <span class="c"># upstream.base_url / upstream.api_key を編集</span>
-./target/release/mask serve</code></pre>
+mask serve</code></pre>
           </div>
         </li>
         <li class="step">

@@ -266,8 +266,64 @@ passphrase strength and short TTLs are what bound that.
 
 ## Install
 
-Prebuilt binaries are attached to every release (Linux x86_64/aarch64, macOS
-x86_64/aarch64, Windows x86_64). Or build it yourself — one command, one file:
+Three ways in. The first two need no toolchain.
+
+### Debian / Ubuntu — one file
+
+```sh
+curl -fsSLO https://github.com/yf-1229/mask/releases/latest/download/mask_amd64.deb
+sudo apt install ./mask_amd64.deb
+```
+
+`apt install ./file.deb`, not `dpkg -i`: the package depends on `libc6` and the
+CA bundle (rustls reads the system root store), and apt resolves both. On ARM
+the file is `mask_arm64.deb`; the versioned name (`mask_1.0.0_amd64.deb`) is what
+apt records, so `apt show mask` and `apt remove mask` behave as you expect.
+
+The package ships the binary, `man mask` and the documents under
+`/usr/share/doc/mask/`. It ships **no service and no `/etc` config** on purpose:
+starting the gateway is a human's act, done from a terminal the operator token
+can be printed to, and the config holds your upstream API key — so it stays in
+your own home directory with mode 600, outside any checkout a coding agent works
+in.
+
+The glibc floor is a declared `Depends`, taken from the symbol versions the
+binary actually imports (`libc6 (>= 2.34)` for a current build), so `apt` on an
+older release refuses the package instead of installing a binary that cannot
+start.
+
+### Linux / macOS — one line
+
+```sh
+curl -fsSL https://mask.branchead.com/install.sh | sh
+```
+
+Picks the build for this machine, checks it against the release's `SHA256SUMS`,
+and installs to `~/.local/bin` (`/usr/local/bin` as root, `--prefix DIR`
+otherwise). It writes no config, starts nothing, reads no key. Re-run it to
+upgrade; `--uninstall` removes the binary and leaves your config and dictionary
+alone.
+
+Read it first if you prefer — it is POSIX `sh` and says what it will do — and
+pin a version when repeatability matters:
+
+```sh
+curl -fsSL https://mask.branchead.com/install.sh -o install.sh && less install.sh
+sh install.sh --dry-run      # the URL and the destination, nothing downloaded
+curl -fsSL https://mask.branchead.com/install.sh | sh -s -- --version 1.0.0
+```
+
+Every asset in a release is covered by one `SHA256SUMS`, so a package downloaded
+by hand can be checked the way the script checks the binary:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Bare `mask-<target>` binaries (Windows x86_64 included) are attached to the same
+release.
+
+### From source
 
 ```sh
 git clone https://github.com/yf-1229/mask.git && cd mask
