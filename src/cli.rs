@@ -287,7 +287,11 @@ fn session_for(config: &GatewayConfig) -> Result<Session> {
             .with_context(|| format!("cannot load dictionary {}", path.display()))?,
         None => UserDictionary::new(),
     };
-    Ok(Session::new(dictionary, config.use_ner))
+    Ok(Session::with_capacity(
+        dictionary,
+        config.use_ner,
+        config.session_capacity,
+    ))
 }
 
 fn gateway_url(config: &GatewayConfig, override_url: Option<&str>) -> String {
@@ -671,7 +675,7 @@ fn cmd_check(
         return Ok(1);
     };
     let mut session = session_for(config)?;
-    let (masked, result) = session.masked(&text);
+    let (masked, result) = session.masked(&text)?;
     // Detection already ran in `masked`; explain re-runs the same layers for
     // labels only, so enabling it cannot change what is masked.
     let explanations = explain.then(|| session.explain(&text));
@@ -697,7 +701,7 @@ fn cmd_audit(
     let multiple = inputs.len() > 1;
     let mut suspicious = 0usize;
     for (label, text) in &inputs {
-        let (masked, result) = session.masked(text);
+        let (masked, result) = session.masked(text)?;
         let hints = scan_suspicions(text, &result);
         suspicious += hints.len();
         if !no_output {

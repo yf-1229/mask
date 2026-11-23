@@ -1,7 +1,7 @@
 //! Top-level pipeline facade: detect -> mask -> (LLM) -> restore -> audit.
 
 use crate::detect::{detect, dictionary::UserDictionary, ner::NativeNer};
-use crate::replace::{mask_text, PseudonymMap};
+use crate::replace::{mask_text, PseudonymMap, SessionFull, DEFAULT_SESSION_CAPACITY};
 use crate::restore::{audit_output, restore, RestoreResult};
 use crate::types::DetectionResult;
 
@@ -18,8 +18,13 @@ pub struct Session {
 
 impl Session {
     pub fn new(dictionary: UserDictionary, use_ner: bool) -> Self {
+        Self::with_capacity(dictionary, use_ner, DEFAULT_SESSION_CAPACITY)
+    }
+
+    /// A session whose pseudonym table holds at most `capacity` entities.
+    pub fn with_capacity(dictionary: UserDictionary, use_ner: bool, capacity: u32) -> Self {
         Session {
-            pseudonyms: PseudonymMap::new(),
+            pseudonyms: PseudonymMap::with_capacity(capacity),
             dictionary,
             ner: if use_ner {
                 Some(NativeNer::new())
@@ -29,10 +34,12 @@ impl Session {
         }
     }
 
-    pub fn masked(&mut self, text: &str) -> (String, DetectionResult) {
+    /// Detect and mask. `Err(SessionFull)` when this session has no id left
+    /// for a new entity; already-bound values keep their tokens.
+    pub fn masked(&mut self, text: &str) -> Result<(String, DetectionResult), SessionFull> {
         let result = detect(text, Some(&self.dictionary), self.ner.as_ref());
-        let masked = mask_text(&result, &mut self.pseudonyms);
-        (masked, result)
+        let masked = mask_text(&result, &mut self.pseudonyms)?;
+        Ok((masked, result))
     }
 
     pub fn unmasked(&self, llm_output: &str) -> RestoreResult {

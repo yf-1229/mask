@@ -25,6 +25,7 @@ dictionary = "dict.tsv"
 
 [session]
 scope = "request"
+capacity = 64
 
 [gateway]
 token = "tok"
@@ -51,6 +52,7 @@ fn defaults_are_the_closed_posture() {
     assert_eq!(config.port, 8080);
     assert!(config.use_ner);
     assert_eq!(config.session_scope, SessionScope::Global);
+    assert_eq!(config.session_capacity, 256);
     assert_eq!(config.leak_gate, LeakGate::Block);
     assert!(config.leak_gate.is_active());
     assert!(config.gateway_token.is_empty());
@@ -82,6 +84,7 @@ fn full_toml_loads_every_section() {
         "dict.tsv"
     );
     assert_eq!(config.session_scope, SessionScope::Request);
+    assert_eq!(config.session_capacity, 64);
     assert_eq!(config.gateway_token, "tok");
     assert_eq!(config.passthrough_allowlist, vec!["/v1/a", "/v1/b"]);
     assert_eq!(config.leak_gate, LeakGate::Warn);
@@ -116,6 +119,7 @@ fn handoff_config_loads_from_toml() {
 fn invalid_values_are_rejected() {
     for toml in [
         "[session]\nscope = \"nope\"\n",
+        "[session]\ncapacity = 0\n",
         "[gateway]\nleak_gate = \"nope\"\n",
         "[gateway]\nhandoff_ttl_seconds = 0\n",
         "[gateway]\nhandoff_ttl_seconds = -5\n",

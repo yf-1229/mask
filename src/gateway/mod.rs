@@ -59,6 +59,7 @@ use crate::gateway::indicators::{
 };
 use crate::gateway::leakguard::{find_header_leaks, find_leaks, Leak};
 use crate::gateway::sharing::{envelope_fingerprint, seal_with, unseal, Envelope, UnsealError};
+use crate::replace::SessionFull;
 use crate::restore::restore_stream_buffer;
 use crate::session::Session;
 
@@ -133,16 +134,23 @@ impl AppState {
         self.refresh_dictionary();
         match &self.session {
             Some(shared) => {
-                let mut guard = shared.lock().expect("session mutex poisoned");
+                // Recover a poisoned lock: one panic must not turn every later
+                // request into a panic. The mappings are still usable; the
+                // alternative is a process that never answers again.
+                let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
                 f(&mut guard)
             }
             None => {
                 let dictionary = self
                     .dictionary
                     .read()
-                    .expect("dictionary lock poisoned")
+                    .unwrap_or_else(|e| e.into_inner())
                     .clone();
-                let mut session = Session::new(dictionary, self.config.use_ner);
+                let mut session = Session::with_capacity(
+                    dictionary,
+                    self.config.use_ner,
+                    self.config.session_capacity,
+                );
                 f(&mut session)
             }
         }
@@ -160,7 +168,7 @@ impl AppState {
         let mut watch = self
             .dictionary_watch
             .lock()
-            .expect("dictionary watch mutex poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         let stamp = file_stamp(path);
         if stamp == watch.stamp {
             return;
@@ -185,7 +193,7 @@ impl AppState {
     ///
     /// Counts only reach the log and the indicators; no term text does.
     fn merge_dictionary(&self, newer: &UserDictionary) -> MergeReport {
-        let mut dictionary = self.dictionary.write().expect("dictionary lock poisoned");
+        let mut dictionary = self.dictionary.write().unwrap_or_else(|e| e.into_inner());
         let report = dictionary.merge_additive(newer);
         if report.changed() {
             self.indicators.incr(Count::DictionaryReloads);
@@ -197,7 +205,7 @@ impl AppState {
                 "dictionary reloaded (additive; removals wait for a restart)"
             );
             if let Some(shared) = &self.session {
-                let mut session = shared.lock().expect("session mutex poisoned");
+                let mut session = shared.lock().unwrap_or_else(|e| e.into_inner());
                 session.dictionary = dictionary.clone();
             }
         }
@@ -208,8 +216,9 @@ impl AppState {
         match &self.session {
             Some(shared) => shared
                 .lock()
-                .map(|guard| guard.pseudonyms.len())
-                .unwrap_or(0),
+                .unwrap_or_else(|e| e.into_inner())
+                .pseudonyms
+                .len(),
             None => 0,
         }
     }
@@ -218,8 +227,8 @@ impl AppState {
         let terms = self
             .dictionary
             .read()
-            .map(|dictionary| dictionary.size())
-            .unwrap_or(0);
+            .unwrap_or_else(|e| e.into_inner())
+            .size();
         build_posture(&self.config, self.mapping_records(), terms)
     }
 }
@@ -250,9 +259,10 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
             })
     });
     let session = if config.session_scope == SessionScope::Global {
-        Some(Arc::new(Mutex::new(Session::new(
+        Some(Arc::new(Mutex::new(Session::with_capacity(
             dictionary.clone(),
             config.use_ner,
+            config.session_capacity,
         ))))
     } else {
         None
@@ -324,6 +334,32 @@ fn anthropic_error(status: StatusCode, etype: &str, message: &str, extra: Value)
         status,
         json!({"type": "error", "error": Value::Object(error)}),
     )
+}
+
+/// Answer the one request that could not be masked because the session's
+/// pseudonym capacity is exhausted. Nothing is sent upstream; the process and
+/// the existing bindings stay intact. The message carries the limit only.
+fn session_full_response(full: SessionFull, anthropic: bool) -> Response {
+    let message = format!("mask gateway: {full}; the request was not sent");
+    if anthropic {
+        anthropic_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            &message,
+            json!({"mask_code": "mask_session_full", "mask_capacity": full.capacity}),
+        )
+    } else {
+        json_response(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "error": {
+                    "message": message,
+                    "code": "mask_session_full",
+                    "capacity": full.capacity,
+                }
+            }),
+        )
+    }
 }
 
 fn body_response(status: StatusCode, body: Bytes, content_type: Option<String>) -> Response {
@@ -563,8 +599,12 @@ async fn send_upstream(
 
 // --- masking / restoring -----------------------------------------------------
 
-fn mask_text_value(text: &str, session: &mut Session, measure: &mut RequestMeasure) -> String {
-    let (masked, result) = session.masked(text);
+fn mask_text_value(
+    text: &str,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) -> Result<String, SessionFull> {
+    let (masked, result) = session.masked(text)?;
     measure.masked += result.entities.len() as u64;
     if !result.entities.is_empty() {
         let mut types: Vec<&str> = result.entities.iter().map(|e| e.kind.as_str()).collect();
@@ -576,58 +616,74 @@ fn mask_text_value(text: &str, session: &mut Session, measure: &mut RequestMeasu
             "masked entities"
         );
     }
-    masked
+    Ok(masked)
 }
 
-fn mask_content(content: &Value, session: &mut Session, measure: &mut RequestMeasure) -> Value {
+fn mask_content(
+    content: &Value,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) -> Result<Value, SessionFull> {
     match content {
-        Value::String(text) => Value::String(mask_text_value(text, session, measure)),
-        Value::Array(parts) => Value::Array(
-            parts
-                .iter()
-                .map(|part| match part {
+        Value::String(text) => Ok(Value::String(mask_text_value(text, session, measure)?)),
+        Value::Array(parts) => {
+            let mut out = Vec::with_capacity(parts.len());
+            for part in parts {
+                out.push(match part {
                     Value::Object(map) if map.get("text").is_some_and(|t| t.is_string()) => {
                         let text = map.get("text").and_then(Value::as_str).unwrap_or("");
                         let mut map = map.clone();
                         map.insert(
                             "text".to_string(),
-                            Value::String(mask_text_value(text, session, measure)),
+                            Value::String(mask_text_value(text, session, measure)?),
                         );
                         Value::Object(map)
                     }
                     other => other.clone(),
-                })
-                .collect(),
-        ),
-        other => other.clone(),
+                });
+            }
+            Ok(Value::Array(out))
+        }
+        other => Ok(other.clone()),
     }
 }
 
 /// Mask every string inside a parsed JSON argument blob.
-fn mask_strings(node: &Value, session: &mut Session, measure: &mut RequestMeasure) -> Value {
+fn mask_strings(
+    node: &Value,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) -> Result<Value, SessionFull> {
     match node {
-        Value::String(text) => Value::String(mask_text_value(text, session, measure)),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (k.clone(), mask_strings(v, session, measure)))
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .map(|v| mask_strings(v, session, measure))
-                .collect(),
-        ),
-        other => other.clone(),
+        Value::String(text) => Ok(Value::String(mask_text_value(text, session, measure)?)),
+        Value::Object(map) => {
+            let mut out = Map::with_capacity(map.len());
+            for (k, v) in map {
+                out.insert(k.clone(), mask_strings(v, session, measure)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(mask_strings(item, session, measure)?);
+            }
+            Ok(Value::Array(out))
+        }
+        other => Ok(other.clone()),
     }
 }
 
 /// Mask a JSON-encoded string; non-JSON strings are masked as text.
-fn mask_json_string(raw: &str, session: &mut Session, measure: &mut RequestMeasure) -> String {
+fn mask_json_string(
+    raw: &str,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) -> Result<String, SessionFull> {
     match serde_json::from_str::<Value>(raw) {
         Ok(parsed) => {
-            let masked = mask_strings(&parsed, session, measure);
-            serde_json::to_string(&masked).unwrap_or_else(|_| raw.to_string())
+            let masked = mask_strings(&parsed, session, measure)?;
+            Ok(serde_json::to_string(&masked).unwrap_or_else(|_| raw.to_string()))
         }
         Err(_) => mask_text_value(raw, session, measure),
     }
@@ -638,42 +694,46 @@ fn mask_tool_calls(
     tool_calls: &Value,
     session: &mut Session,
     measure: &mut RequestMeasure,
-) -> Value {
+) -> Result<Value, SessionFull> {
     let Value::Array(items) = tool_calls else {
-        return tool_calls.clone();
+        return Ok(tool_calls.clone());
     };
-    Value::Array(
-        items
-            .iter()
-            .map(|call| {
-                let Some(call_map) = call.as_object() else {
-                    return call.clone();
-                };
-                let Some(function) = call_map.get("function").and_then(Value::as_object) else {
-                    return call.clone();
-                };
-                let Some(arguments) = function.get("arguments").and_then(Value::as_str) else {
-                    return call.clone();
-                };
-                let mut call_map = call_map.clone();
-                let mut function = function.clone();
-                function.insert(
-                    "arguments".to_string(),
-                    Value::String(mask_json_string(arguments, session, measure)),
-                );
-                call_map.insert("function".to_string(), Value::Object(function));
-                Value::Object(call_map)
-            })
-            .collect(),
-    )
+    let mut out = Vec::with_capacity(items.len());
+    for call in items {
+        let Some(call_map) = call.as_object() else {
+            out.push(call.clone());
+            continue;
+        };
+        let Some(function) = call_map.get("function").and_then(Value::as_object) else {
+            out.push(call.clone());
+            continue;
+        };
+        let Some(arguments) = function.get("arguments").and_then(Value::as_str) else {
+            out.push(call.clone());
+            continue;
+        };
+        let mut call_map = call_map.clone();
+        let mut function = function.clone();
+        function.insert(
+            "arguments".to_string(),
+            Value::String(mask_json_string(arguments, session, measure)?),
+        );
+        call_map.insert("function".to_string(), Value::Object(function));
+        out.push(Value::Object(call_map));
+    }
+    Ok(Value::Array(out))
 }
 
 /// Return a copy of the request body with PII in messages replaced.
+///
+/// `Err(SessionFull)` means this session ran out of token ids; the caller
+/// answers that request with `mask_session_full` and leaves the process (and
+/// every existing binding) intact.
 pub fn mask_chat_request(
     body: &Value,
     session: &mut Session,
     measure: &mut RequestMeasure,
-) -> Value {
+) -> Result<Value, SessionFull> {
     let mut masked = body.as_object().cloned().unwrap_or_default();
     if let Some(Value::Array(messages)) = masked.get("messages").cloned() {
         let mut out: Vec<Value> = Vec::with_capacity(messages.len());
@@ -686,19 +746,19 @@ pub fn mask_chat_request(
             let content = message_map.get("content").cloned().unwrap_or(Value::Null);
             message_map.insert(
                 "content".to_string(),
-                mask_content(&content, session, measure),
+                mask_content(&content, session, measure)?,
             );
             if let Some(tool_calls) = message_map.get("tool_calls").cloned() {
                 message_map.insert(
                     "tool_calls".to_string(),
-                    mask_tool_calls(&tool_calls, session, measure),
+                    mask_tool_calls(&tool_calls, session, measure)?,
                 );
             }
             out.push(Value::Object(message_map));
         }
         masked.insert("messages".to_string(), Value::Array(out));
     }
-    Value::Object(masked)
+    Ok(Value::Object(masked))
 }
 
 fn restore_text(text: &str, session: &Session, measure: &mut RequestMeasure) -> String {
@@ -855,11 +915,14 @@ async fn chat_completions(State(state): State<AppState>, request: Request) -> Re
     };
 
     let mut measure = RequestMeasure::default();
-    let (masked, blocked) = state.with_session(|session| {
-        let masked = mask_chat_request(&body, session, &mut measure);
+    let (masked, blocked) = match state.with_session(|session| {
+        let masked = mask_chat_request(&body, session, &mut measure)?;
         let blocked = gate(&state, session, &masked, &headers, "chat/completions");
-        (masked, blocked)
-    });
+        Ok::<_, SessionFull>((masked, blocked))
+    }) {
+        Ok(value) => value,
+        Err(full) => return session_full_response(full, false),
+    };
     if let Some(blocked) = blocked {
         return blocked;
     }
@@ -954,12 +1017,15 @@ async fn messages(State(state): State<AppState>, request: Request) -> Response {
     }
 
     let mut measure = RequestMeasure::default();
-    let (openai_body, masked, blocked) = state.with_session(|session| {
+    let (openai_body, masked, blocked) = match state.with_session(|session| {
         let openai_body = anthropic_to_openai(&body);
-        let masked = mask_chat_request(&openai_body, session, &mut measure);
+        let masked = mask_chat_request(&openai_body, session, &mut measure)?;
         let blocked = gate(&state, session, &masked, &headers, "v1/messages");
-        (openai_body, masked, blocked)
-    });
+        Ok::<_, SessionFull>((openai_body, masked, blocked))
+    }) {
+        Ok(value) => value,
+        Err(full) => return session_full_response(full, true),
+    };
     if let Some(blocked) = blocked {
         // Re-wrap the gate decision in the Anthropic error envelope.
         let err = blocked_error(&blocked);
@@ -1195,7 +1261,7 @@ async fn admin_import(State(state): State<AppState>, request: Request) -> Respon
                 let mut map = state
                     .handoff_failures
                     .lock()
-                    .expect("handoff failure mutex poisoned");
+                    .unwrap_or_else(|e| e.into_inner());
                 let entry = map.entry(fingerprint.clone()).or_insert(0);
                 *entry += 1;
                 *entry
@@ -1328,7 +1394,7 @@ async fn admin_dictionary_reload(State(state): State<AppState>, request: Request
         let mut watch = state
             .dictionary_watch
             .lock()
-            .expect("dictionary watch mutex poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         watch.stamp = stamp;
     }
     json_response(
@@ -1939,4 +2005,38 @@ pub async fn serve(mut config: GatewayConfig) -> anyhow::Result<()> {
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic while the session lock was held used to poison it, and every
+    /// later request then panicked in `with_session`. It must recover.
+    #[test]
+    fn poisoned_session_mutex_still_serves_requests() {
+        crate::install_crypto_provider();
+        let dictionary = UserDictionary::new();
+        let shared = Arc::new(Mutex::new(Session::new(dictionary.clone(), false)));
+        let state = AppState {
+            config: Arc::new(GatewayConfig::default()),
+            http: reqwest::Client::new(),
+            dictionary: Arc::new(RwLock::new(dictionary)),
+            dictionary_watch: Arc::new(Mutex::new(DictionaryWatch::default())),
+            indicators: Arc::new(Indicators::new()),
+            session: Some(shared.clone()),
+            admin_human_token: None,
+            handoff_failures: Arc::new(Mutex::new(HashMap::new())),
+            handoff_consumed: Arc::new(Mutex::new(HashSet::new())),
+        };
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = shared.lock().unwrap();
+            panic!("simulated panic while the session lock was held");
+        }));
+        assert!(shared.is_poisoned());
+
+        let capacity = state.with_session(|session| session.pseudonyms.len());
+        assert_eq!(capacity, 0);
+    }
 }

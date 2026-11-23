@@ -140,8 +140,8 @@ fn kdf_cost_is_moderate_by_default() {
 #[test]
 fn export_import_roundtrip_preserves_tokens() {
     let mut src = PseudonymMap::new();
-    let person = src.assign(EntityType::Person, "山田太郎");
-    let email = src.assign(EntityType::Email, "taro@example.com");
+    let person = src.assign(EntityType::Person, "山田太郎").unwrap();
+    let email = src.assign(EntityType::Email, "taro@example.com").unwrap();
     let mut dst = PseudonymMap::new();
     for record in src.export_records() {
         assert_eq!(
@@ -153,7 +153,7 @@ fn export_import_roundtrip_preserves_tokens() {
     assert_eq!(dst.restore_value(&email.token), Some("taro@example.com"));
     // the same value maps to the same token on the receiving side
     assert_eq!(
-        dst.assign(EntityType::Person, "山田太郎").token,
+        dst.assign(EntityType::Person, "山田太郎").unwrap().token,
         person.token
     );
 }
@@ -161,7 +161,7 @@ fn export_import_roundtrip_preserves_tokens() {
 #[test]
 fn import_never_rebinds_a_token() {
     let mut map = PseudonymMap::new();
-    let record = map.assign(EntityType::Person, "山田太郎");
+    let record = map.assign(EntityType::Person, "山田太郎").unwrap();
     assert_eq!(
         map.import_record(&record.token, "別の人物", 1),
         ImportStatus::Conflict
@@ -172,7 +172,7 @@ fn import_never_rebinds_a_token() {
 #[test]
 fn import_of_the_same_value_is_already() {
     let mut map = PseudonymMap::new();
-    let record = map.assign(EntityType::Person, "山田太郎");
+    let record = map.assign(EntityType::Person, "山田太郎").unwrap();
     assert_eq!(
         map.import_record(&record.token, "山田太郎", 1),
         ImportStatus::Already
@@ -203,8 +203,9 @@ fn imported_values_feed_the_leak_gate() {
 #[test]
 fn sealed_records_roundtrip_through_the_envelope() {
     let mut src = PseudonymMap::new();
-    src.assign(EntityType::Person, "山田太郎");
-    src.assign(EntityType::Address, "港区赤坂一丁目2番3号");
+    src.assign(EntityType::Person, "山田太郎").unwrap();
+    src.assign(EntityType::Address, "港区赤坂一丁目2番3号")
+        .unwrap();
     let payload = json!({"v": 1, "records": src.export_records()});
     let envelope = test_envelope(&payload, PASS, 60);
     let opened = unseal(&envelope, PASS).expect("unseal");

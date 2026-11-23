@@ -10,6 +10,7 @@
 # environment variables override this file:
 #   MASK_SERVER_HOST / MASK_SERVER_PORT / MASK_UPSTREAM_BASE_URL / MASK_UPSTREAM_API_KEY
 #   MASK_GATEWAY_TOKEN / MASK_LEAK_GATE / MASK_STATUS_PUBLIC
+#   MASK_SESSION_CAPACITY
 #   MASK_HANDOFF_TTL_SECONDS / MASK_HANDOFF_MAX_ATTEMPTS
 #   MASK_HANDOFF_KDF_OPSLIMIT / MASK_HANDOFF_KDF_MEMLIMIT
 #   MASK_ADMIN_ALLOW_REMOTE / MASK_ADMIN_REQUIRE_HUMAN / MASK_AGENT_HOST_GUARD
@@ -30,6 +31,8 @@ use_ner = true                   # 組み込みの人名検出 (モデルダウ�
 
 [session]
 scope = "global"   # "global" | "request"
+capacity = 256     # 1セッションが割り当てられる実体の上限。超過したリクエストだけが
+                   # `mask_session_full` (400) で失敗し、プロセスは落ちない
 
 [gateway]
 # token = "team-secret"           # クライアントに API キーとして配る(空なら認証なし)

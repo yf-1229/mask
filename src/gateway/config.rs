@@ -73,6 +73,10 @@ pub struct GatewayConfig {
     pub use_ner: bool,
     pub dictionary_path: Option<PathBuf>,
     pub session_scope: SessionScope,
+    /// Distinct entities one session can bind before new ones are refused
+    /// (`mask_session_full`). Default 256; a too-small value fails closed, it
+    /// never makes the gateway panic.
+    pub session_capacity: u32,
     /// If set, clients must send it as their API key (`Authorization: Bearer
     /// <token>` or `x-api-key: <token>`). Distribute this instead of the real
     /// upstream key.
@@ -130,6 +134,7 @@ impl std::fmt::Debug for GatewayConfig {
             .field("use_ner", &self.use_ner)
             .field("dictionary_path", &self.dictionary_path)
             .field("session_scope", &self.session_scope)
+            .field("session_capacity", &self.session_capacity)
             .field("gateway_token", &secret(&self.gateway_token))
             .field("passthrough_allowlist", &self.passthrough_allowlist)
             .field("leak_gate", &self.leak_gate)
@@ -159,6 +164,7 @@ impl Default for GatewayConfig {
             use_ner: true,
             dictionary_path: None,
             session_scope: SessionScope::Global,
+            session_capacity: crate::replace::DEFAULT_SESSION_CAPACITY,
             gateway_token: String::new(),
             passthrough_allowlist: DEFAULT_PASSTHROUGH_ALLOWLIST
                 .iter()
@@ -210,6 +216,7 @@ struct MaskSection {
 #[derive(Debug, Deserialize)]
 struct SessionSection {
     scope: Option<String>,
+    capacity: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,6 +295,12 @@ impl GatewayConfig {
                     }
                 };
             }
+            if let Some(capacity) = session.capacity {
+                if capacity < 1 {
+                    bail!("session.capacity must be >= 1");
+                }
+                config.session_capacity = capacity;
+            }
         }
         if let Some(gateway) = file.gateway {
             if let Some(token) = gateway.token {
@@ -357,6 +370,13 @@ impl GatewayConfig {
         }
         if let Ok(value) = std::env::var("MASK_UPSTREAM_API_KEY") {
             self.upstream_api_key = value;
+        }
+        if let Ok(value) = std::env::var("MASK_SESSION_CAPACITY") {
+            if let Ok(capacity) = value.trim().parse::<u32>() {
+                if capacity >= 1 {
+                    self.session_capacity = capacity;
+                }
+            }
         }
         if let Ok(value) = std::env::var("MASK_GATEWAY_TOKEN") {
             self.gateway_token = value;

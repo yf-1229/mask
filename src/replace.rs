@@ -27,9 +27,29 @@ pub const TOKEN_CLOSE: char = '⟧';
 /// Same opening bracket as a string literal (regex construction, formatting).
 pub const TOKEN_OPEN_STR: &str = "⟦";
 
-/// Pool of candidate ids, shuffled per session. Larger than any realistic
-/// entity count in one session.
-const POOL_SIZE: u32 = 256;
+/// Default number of distinct entities one session can bind. Larger than any
+/// realistic entity count in one session; configurable via `session.capacity`.
+pub const DEFAULT_SESSION_CAPACITY: u32 = 256;
+
+/// The session has bound as many entities as its id pool holds. The request
+/// that hit the limit fails; the process and its existing bindings survive.
+/// Carries only the configured limit — never a raw value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionFull {
+    pub capacity: u32,
+}
+
+impl std::fmt::Display for SessionFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "session pseudonym table is full (capacity {}); raise session.capacity or use session.scope = \"request\"",
+            self.capacity
+        )
+    }
+}
+
+impl std::error::Error for SessionFull {}
 
 /// One binding in the session mapping table.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +102,7 @@ impl ImportStatus {
 #[derive(Clone, Debug)]
 pub struct PseudonymMap {
     pool: Vec<u32>,
+    capacity: u32,
     records: Vec<(EntityType, String, TokenRecord)>,
     /// Every raw value ever assigned (NFKC keys), containment variants
     /// included. Consumed by the gateway's outbound leak gate; like the rest of
@@ -97,10 +118,16 @@ impl Default for PseudonymMap {
 
 impl PseudonymMap {
     pub fn new() -> Self {
-        let mut pool: Vec<u32> = (1..=POOL_SIZE).collect();
+        Self::with_capacity(DEFAULT_SESSION_CAPACITY)
+    }
+
+    /// Build a map whose id pool holds `capacity` distinct entities.
+    pub fn with_capacity(capacity: u32) -> Self {
+        let mut pool: Vec<u32> = (1..=capacity).collect();
         secure_shuffle(&mut pool);
         PseudonymMap {
             pool,
+            capacity,
             records: Vec::new(),
             seen: BTreeSet::new(),
         }
@@ -108,7 +135,15 @@ impl PseudonymMap {
 
     /// Get-or-create the token for an entity occurrence, unifying containment
     /// variants (substring containment => same token).
-    pub fn assign(&mut self, kind: EntityType, raw_value: &str) -> TokenRecord {
+    ///
+    /// Returns [`SessionFull`] when every id is bound; the caller fails that
+    /// request instead of panicking (a panic here used to poison the shared
+    /// session mutex and take the whole gateway down).
+    pub fn assign(
+        &mut self,
+        kind: EntityType,
+        raw_value: &str,
+    ) -> Result<TokenRecord, SessionFull> {
         let key_value = normalize_key(raw_value);
         self.seen.insert(key_value.clone());
         for (_, _, rec) in self.records.iter_mut() {
@@ -122,11 +157,13 @@ impl PseudonymMap {
                     rec.value = raw_value.to_string();
                 }
                 rec.occurrences += 1;
-                return rec.clone();
+                return Ok(rec.clone());
             }
         }
         let Some(token_id) = self.pool.pop() else {
-            panic!("token id pool exhausted for this session");
+            return Err(SessionFull {
+                capacity: self.capacity,
+            });
         };
         let label = kind.ja_label();
         let rec = TokenRecord {
@@ -137,7 +174,7 @@ impl PseudonymMap {
             occurrences: 1,
         };
         self.records.push((kind, key_value, rec.clone()));
-        rec
+        Ok(rec)
     }
 
     pub fn restore_value(&self, token: &str) -> Option<&str> {
@@ -256,17 +293,17 @@ impl PseudonymMap {
 pub fn compute_replacements(
     result: &DetectionResult,
     pseudonyms: &mut PseudonymMap,
-) -> Vec<Replacement> {
+) -> Result<Vec<Replacement>, SessionFull> {
     let mut replacements = Vec::with_capacity(result.entities.len());
     for ent in &result.entities {
-        let rec = pseudonyms.assign(ent.kind, &ent.text);
+        let rec = pseudonyms.assign(ent.kind, &ent.text)?;
         replacements.push(Replacement {
             start: ent.start,
             end: ent.end,
             token: rec.token,
         });
     }
-    replacements
+    Ok(replacements)
 }
 
 /// Build the masked text. Replacements are sorted so spans never shift.
@@ -283,9 +320,12 @@ pub fn apply_replacements(text: &str, mut replacements: Vec<Replacement>) -> Str
     out
 }
 
-pub fn mask_text(result: &DetectionResult, pseudonyms: &mut PseudonymMap) -> String {
-    let replacements = compute_replacements(result, pseudonyms);
-    apply_replacements(&result.text, replacements)
+pub fn mask_text(
+    result: &DetectionResult,
+    pseudonyms: &mut PseudonymMap,
+) -> Result<String, SessionFull> {
+    let replacements = compute_replacements(result, pseudonyms)?;
+    Ok(apply_replacements(&result.text, replacements))
 }
 
 /// Fisher-Yates with a CSPRNG so token ids carry no positional meaning.
@@ -317,4 +357,27 @@ pub fn random_hex(n: usize) -> String {
     let mut buf = vec![0u8; n];
     getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable");
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_session_refuses_only_new_values() {
+        let mut map = PseudonymMap::with_capacity(2);
+        let first = map.assign(EntityType::Person, "山田太郎").unwrap();
+        let second = map.assign(EntityType::Person, "鈴木一郎").unwrap();
+        assert_ne!(first.token, second.token);
+
+        let full = map.assign(EntityType::Person, "佐藤次郎").unwrap_err();
+        assert_eq!(full.capacity, 2);
+
+        // Existing bindings keep working; the pool did not shrink on failure.
+        assert_eq!(
+            map.assign(EntityType::Person, "山田太郎").unwrap().token,
+            first.token
+        );
+        assert_eq!(map.restore_value(&first.token), Some("山田太郎"));
+    }
 }

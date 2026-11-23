@@ -525,3 +525,44 @@ async fn unreachable_upstream_is_a_clean_gateway_error() {
     let payload: Value = response.json().await.unwrap();
     assert_eq!(payload["error"]["code"], "mask_upstream_unreachable");
 }
+
+/// Regression for #10: 300 distinct entities overflow the default 256-id pool.
+/// That request fails with `mask_session_full` — nothing reaches the upstream —
+/// and the gateway (and its poisoned-prone session mutex) keeps serving.
+#[tokio::test]
+async fn session_capacity_exhaustion_fails_one_request_and_recovers() {
+    let terms: Vec<(String, &str)> = (0..300)
+        .map(|i| (format!("用語{i:03}"), "person"))
+        .collect();
+    let h = start_with_dict(&terms).await;
+
+    let text = terms
+        .iter()
+        .map(|(term, _)| term.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    let response = h.post_json("/v1/chat/completions", chat_body(&text)).await;
+    assert_eq!(response.status(), 400);
+    let error: Value = response.json().await.unwrap();
+    assert_eq!(error["error"]["code"], "mask_session_full");
+    assert_eq!(error["error"]["capacity"], 256);
+    let rendered = error.to_string();
+    assert!(
+        !rendered.contains("用語"),
+        "the error must not echo raw values: {rendered}"
+    );
+    assert!(
+        h.upstream.last().is_none(),
+        "a request that could not be fully masked must not be sent upstream"
+    );
+
+    // The process still answers, and an already-bound value keeps its token.
+    let response = h
+        .post_json("/v1/chat/completions", chat_body("用語000"))
+        .await;
+    assert_eq!(response.status(), 200);
+    let sent = h.upstream.sent();
+    let masked = sent["messages"][0]["content"].as_str().unwrap().to_string();
+    assert!(masked.contains('⟦'), "{masked}");
+    assert!(!masked.contains("用語000"), "{masked}");
+}
