@@ -26,9 +26,10 @@ use serde_json::{json, Value};
 
 use crate::detect::dictionary::{append_or_update, AddOutcome, ParseReport, UserDictionary};
 use crate::detect::suspect::{scan as scan_suspicions, Suspicion};
+use crate::detect::Explanation;
 use crate::gateway::config::GatewayConfig;
 use crate::session::Session;
-use crate::types::{DetectionResult, EntityType};
+use crate::types::{DetectionResult, EntityType, Source};
 
 // --- ANSI --------------------------------------------------------------------
 
@@ -83,6 +84,9 @@ enum Command {
     Check {
         /// text to check (or pipe via stdin)
         text: Vec<String>,
+        /// print the rule that accepted each span (detection unchanged)
+        #[arg(long)]
+        explain: bool,
     },
     /// dry-run over files: mask, then point at likely detection misses
     Audit {
@@ -186,7 +190,7 @@ async fn run(cli: Cli) -> Result<i32> {
 
     let config = GatewayConfig::load(cli.config.as_deref())?;
     match cli.command {
-        Command::Check { text } => cmd_check(&text, &config, colorize),
+        Command::Check { text, explain } => cmd_check(&text, explain, &config, colorize),
         Command::Audit {
             files,
             strict,
@@ -520,6 +524,36 @@ pub fn render_check(_masked: &str, result: &DetectionResult, colorize: bool) -> 
     lines.join("\n")
 }
 
+/// Report for `mask check --explain`: one line per accepted span, with the
+/// layer and rule that accepted it. Offsets and labels only — the matched text
+/// is deliberately absent so the report can be pasted into an issue.
+pub fn render_explain(explanations: &[Explanation]) -> String {
+    if explanations.is_empty() {
+        return "  (nothing accepted — no rule matched)".to_string();
+    }
+    let mut lines = vec!["    span        layer  kind      rule".to_string()];
+    for explanation in explanations {
+        let entity = &explanation.entity;
+        lines.push(format!(
+            "  {:>4}..{:<4} {:<6} {:<9} {}",
+            entity.start,
+            entity.end,
+            source_label(entity.source),
+            entity.kind.as_str(),
+            explanation.reason
+        ));
+    }
+    lines.join("\n")
+}
+
+fn source_label(source: Source) -> &'static str {
+    match source {
+        Source::Rule => "rule",
+        Source::Dict => "dict",
+        Source::Ner => "ner",
+    }
+}
+
 /// Report for `mask audit` (pure). Locations and counts only: the audited
 /// values never enter the report, so it can be pasted into an issue.
 pub fn render_audit(
@@ -630,16 +664,28 @@ fn read_stdin_text() -> Option<String> {
     }
 }
 
-fn cmd_check(args: &[String], config: &GatewayConfig, colorize: bool) -> Result<i32> {
+fn cmd_check(
+    args: &[String],
+    explain: bool,
+    config: &GatewayConfig,
+    colorize: bool,
+) -> Result<i32> {
     let Some(text) = read_prompt(args) else {
         eprintln!("error: no text given (pass it as an argument or pipe via stdin)");
         return Ok(1);
     };
     let mut session = session_for(config)?;
     let (masked, result) = session.masked(&text)?;
+    // Detection already ran in `masked`; explain re-runs the same layers for
+    // labels only, so enabling it cannot change what is masked.
+    let explanations = explain.then(|| session.explain(&text));
     println!("{masked}");
     eprintln!("{}", paint("[mask check]", DIM, colorize));
     eprintln!("{}", render_check(&masked, &result, colorize));
+    if let Some(explanations) = explanations {
+        eprintln!("{}", paint("[explain]", DIM, colorize));
+        eprintln!("{}", render_explain(&explanations));
+    }
     Ok(0)
 }
 
