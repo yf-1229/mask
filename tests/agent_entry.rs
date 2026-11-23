@@ -177,7 +177,11 @@ async fn messages_leak_gate_is_wrapped_in_an_anthropic_error() {
     let payload: Value = response.json().await.unwrap();
     assert_eq!(payload["type"], "error");
     assert_eq!(payload["error"]["mask_code"], "mask_leak_blocked");
-    assert_eq!(payload["error"]["mask_values"], json!(["山田太郎"]));
+    assert!(payload["error"].get("mask_values").is_none(), "{payload}");
+    let leaks = payload["error"]["mask_leaks"].as_array().unwrap();
+    assert_eq!(leaks.len(), 1, "{payload}");
+    assert_eq!(leaks[0]["value_sha256_prefix"], json!("6b0e1c8c"));
+    assert!(!payload.to_string().contains("山田太郎"), "{payload}");
     assert!(h.upstream.last().is_none(), "request left the process");
 }
 

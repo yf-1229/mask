@@ -72,7 +72,10 @@ mask serve                        # start the gateway
 ```
 
 - `check` is a detection dry run: masked text on stdout, indicators (counts and
-  types) on stderr, so it pipes cleanly
+  types) on stderr, so it pipes cleanly. `check --explain` adds the raw detected
+  values to stderr — the local, opt-in diagnostic. The gateway's leak-block
+  response and WARN log always show only `key#<sha256-prefix>` paths and a
+  value hash prefix, never the value or the raw key.
 - `chat` talks to a running gateway and prints the response body to stdout, with
   a reliability footer derived from the `X-Mask-*` headers
 - `audit` runs the same detector over whole files (or stdin) and prints the
@@ -181,7 +184,9 @@ surfaces, always as **numbers only** — never values, tokens or entity paths.
 What is guaranteed: a value the session has detected does not leave through any
 field, path or header. What is not: a value that was never detected (unknown
 unknowns) — that is the detection layer's job, and the canary corpus is the
-regression gate. Logs never contain real values (field paths and sha256 only).
+regression gate. Logs and leak-block responses never contain real values:
+object keys are shown as `key#<sha256-prefix>` and each leak carries a value
+hash prefix. `mask check --explain` is the local opt-in that prints raw values.
 
 ## Keeping the gateway out of an AI agent's hands
 

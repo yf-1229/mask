@@ -177,7 +177,9 @@ Windows, macOS and Linux.
   before sending; any real value the session has detected discards the request
   (fail-closed)
 - Gateway token authentication on both entrances, constant-time comparison
-- Logs carry field paths and sha256 digests only — never values
+- Leak-gate logs and block responses carry hashed paths (`key#<sha256-prefix>`)
+  and value hash prefixes only — never values or raw object keys; the raw-value
+  opt-in is the local `mask check --explain`
 
 ### Reliability indicators
 

@@ -84,7 +84,8 @@ enum Command {
     Check {
         /// text to check (or pipe via stdin)
         text: Vec<String>,
-        /// print the rule that accepted each span (detection unchanged)
+        /// print the rule that accepted each span and the raw detected values
+        /// to stderr (local opt-in; the gateway never prints raw values)
         #[arg(long)]
         explain: bool,
     },
@@ -685,6 +686,26 @@ fn cmd_check(
     if let Some(explanations) = explanations {
         eprintln!("{}", paint("[explain]", DIM, colorize));
         eprintln!("{}", render_explain(&explanations));
+        // Opt-in and local only: the gateway's logs and block responses always
+        // carry hashes, never raw values. Printed to stderr so stdout stays the
+        // pipeable masked text.
+        eprintln!(
+            "{}",
+            paint(
+                "[mask check] explain — raw values (local only)",
+                YELLOW,
+                colorize
+            )
+        );
+        for entity in &result.entities {
+            eprintln!(
+                "  {} {} ({}..{})",
+                paint(&entity.text, YELLOW, colorize),
+                type_ja(entity.kind),
+                entity.start,
+                entity.end
+            );
+        }
     }
     Ok(0)
 }
