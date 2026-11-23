@@ -377,6 +377,8 @@ dictionary = "dictionary.tsv" # 追加辞書 (TSV: 用語<TAB>タイプ)
 [session]
 scope = "global"            # "global": 会話を通じて疑似名を安定させる
                             # "request": リクエストごとに新しいテーブル
+capacity = 256              # 1セッションが割り当てられる実体数。超過した
+                            # リクエストだけが mask_session_full (400) で失敗する
 
 [gateway]
 token = ""                   # クライアントに配るトークン (空なら認証なし=localhost限定)

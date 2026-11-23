@@ -172,7 +172,9 @@ fn rule_recall_on_canaries() {
 #[test]
 fn dictionary_exact_term_round_trips() {
     let mut session = session_with(&[("山田太郎", EntityType::Person)]);
-    let (masked, result) = session.masked("昨日、山田太郎さんから電話がありました");
+    let (masked, result) = session
+        .masked("昨日、山田太郎さんから電話がありました")
+        .unwrap();
     assert!(result
         .entities
         .iter()
@@ -188,7 +190,7 @@ fn dictionary_longest_match_wins() {
         ("山田", EntityType::Person),
         ("山田太郎", EntityType::Person),
     ]);
-    let (_, result) = session.masked("山田太郎の弟の山田次郎");
+    let (_, result) = session.masked("山田太郎の弟の山田次郎").unwrap();
     let texts: Vec<&str> = result
         .entities
         .iter()
@@ -204,7 +206,7 @@ fn dictionary_covered_substring_not_double_detected() {
         ("山田", EntityType::Person),
         ("山田太郎", EntityType::Person),
     ]);
-    let (_, result) = session.masked("山田太郎に会った");
+    let (_, result) = session.masked("山田太郎に会った").unwrap();
     let hits: Vec<&Entity> = result
         .entities
         .iter()
@@ -220,7 +222,7 @@ fn dictionary_load_tsv_and_missing_file() {
     let dictionary = UserDictionary::load(&path).unwrap();
     assert_eq!(dictionary.size(), 2);
     let mut session = Session::new(dictionary, false);
-    let (masked, _) = session.masked("鈴木一郎は○○銀行の融資を受けた");
+    let (masked, _) = session.masked("鈴木一郎は○○銀行の融資を受けた").unwrap();
     assert!(!masked.contains("鈴木一郎"));
     assert!(!masked.contains("○○銀行"));
 
@@ -240,8 +242,8 @@ fn dictionary_ignores_comments_and_unknown_types() {
 #[test]
 fn same_value_same_token() {
     let mut map = PseudonymMap::new();
-    let first = map.assign(EntityType::Person, "山田太郎");
-    let second = map.assign(EntityType::Person, "山田太郎");
+    let first = map.assign(EntityType::Person, "山田太郎").unwrap();
+    let second = map.assign(EntityType::Person, "山田太郎").unwrap();
     assert_eq!(first.token, second.token);
     assert_eq!(map.restore_value(&first.token), Some("山田太郎"));
 }
@@ -249,8 +251,8 @@ fn same_value_same_token() {
 #[test]
 fn variant_unification_prevents_fragmentation() {
     let mut map = PseudonymMap::new();
-    let full = map.assign(EntityType::Person, "山田太郎");
-    let short = map.assign(EntityType::Person, "山田");
+    let full = map.assign(EntityType::Person, "山田太郎").unwrap();
+    let short = map.assign(EntityType::Person, "山田").unwrap();
     assert_eq!(short.token, full.token);
     // the mapping keeps the longer variant for restoration
     assert_eq!(map.restore_value(&full.token), Some("山田太郎"));
@@ -261,7 +263,7 @@ fn id_pool_is_shuffled_not_sequential() {
     let mut digits: Vec<String> = Vec::new();
     for _ in 0..30 {
         let mut map = PseudonymMap::new();
-        let token = map.assign(EntityType::Person, "山田太郎").token;
+        let token = map.assign(EntityType::Person, "山田太郎").unwrap().token;
         let digits_part: String = token.chars().filter(|c| c.is_ascii_digit()).collect();
         digits.push(digits_part);
     }
@@ -292,7 +294,7 @@ fn mask_text_shifts_spans_correctly() {
             ),
         ],
     );
-    let masked = mask_text(&result, &mut map);
+    let masked = mask_text(&result, &mut map).unwrap();
     assert!(!masked.contains("山田太郎"));
     assert!(!masked.contains("090-1234-5678"));
     assert_eq!(masked.matches('⟦').count(), 3);
@@ -301,8 +303,8 @@ fn mask_text_shifts_spans_correctly() {
 #[test]
 fn different_types_get_different_tokens() {
     let mut map = PseudonymMap::new();
-    let person = map.assign(EntityType::Person, "山田");
-    let org = map.assign(EntityType::Org, "山田");
+    let person = map.assign(EntityType::Person, "山田").unwrap();
+    let org = map.assign(EntityType::Org, "山田").unwrap();
     assert_ne!(person.token, org.token);
 }
 
@@ -311,7 +313,7 @@ fn different_types_get_different_tokens() {
 #[test]
 fn restore_exact_token() {
     let mut map = PseudonymMap::new();
-    let rec = map.assign(EntityType::Person, "山田太郎");
+    let rec = map.assign(EntityType::Person, "山田太郎").unwrap();
     let out = restore(&format!("ご担当者は{}様ですね", rec.token), &map);
     assert_eq!(out.text, "ご担当者は山田太郎様ですね");
     assert_eq!(out.restored, 1);
@@ -321,8 +323,10 @@ fn restore_exact_token() {
 #[test]
 fn restore_multiple_tokens() {
     let mut map = PseudonymMap::new();
-    let person = map.assign(EntityType::Person, "山田太郎");
-    let address = map.assign(EntityType::Address, "港区赤坂一丁目2番3号");
+    let person = map.assign(EntityType::Person, "山田太郎").unwrap();
+    let address = map
+        .assign(EntityType::Address, "港区赤坂一丁目2番3号")
+        .unwrap();
     let out = restore(
         &format!("{}様は{}在住です", person.token, address.token),
         &map,
@@ -333,7 +337,7 @@ fn restore_multiple_tokens() {
 #[test]
 fn mutated_token_is_repaired_with_a_warning() {
     let mut map = PseudonymMap::new();
-    let rec = map.assign(EntityType::Person, "山田太郎");
+    let rec = map.assign(EntityType::Person, "山田太郎").unwrap();
     let mutated = rec.token.replace('⟧', ""); // lost closing bracket
     let out = restore(&format!("担当は{mutated}です"), &map);
     assert!(out.fuzzy_repaired == 1 || !out.unresolved_tokens.is_empty());
@@ -346,7 +350,7 @@ fn mutated_token_is_repaired_with_a_warning() {
 #[test]
 fn hallucinated_token_never_guesses_another_entity() {
     let mut map = PseudonymMap::new();
-    map.assign(EntityType::Person, "山田太郎");
+    map.assign(EntityType::Person, "山田太郎").unwrap();
     let out = restore("担当は⟦人名999⟧です", &map);
     assert!(out.text.contains("⟦人名999⟧"));
     assert!(!out.text.contains("山田太郎"));
@@ -375,7 +379,7 @@ fn levenshtein_is_capped() {
 #[test]
 fn audit_flags_direct_leak() {
     let mut map = PseudonymMap::new();
-    map.assign(EntityType::Person, "山田太郎");
+    map.assign(EntityType::Person, "山田太郎").unwrap();
     let warnings = audit_output("担当は⟦人名999⟧です", "担当は山田太郎です", &map);
     assert!(warnings
         .iter()
@@ -385,7 +389,7 @@ fn audit_flags_direct_leak() {
 #[test]
 fn audit_flags_token_residue() {
     let mut map = PseudonymMap::new();
-    map.assign(EntityType::Person, "山田太郎");
+    map.assign(EntityType::Person, "山田太郎").unwrap();
     let warnings = audit_output("x", "残骸⟦人名999⟧残り", &map);
     assert!(warnings.iter().any(|w| w.contains("token residue")));
 }
@@ -393,7 +397,7 @@ fn audit_flags_token_residue() {
 #[test]
 fn restore_miss_keeps_placeholder_and_warns() {
     let mut map = PseudonymMap::new();
-    map.assign(EntityType::Person, "山田太郎");
+    map.assign(EntityType::Person, "山田太郎").unwrap();
     let out = restore("⟦住所77⟧の近くで会いましょう", &map);
     assert!(out.text.contains("⟦住所77⟧"));
     assert_eq!(out.unresolved_tokens, vec!["⟦住所77⟧".to_string()]);
@@ -414,11 +418,11 @@ fn ner_finds_names_and_stops_at_honorifics() {
 #[test]
 fn ner_can_be_disabled() {
     let mut with_ner = Session::new(UserDictionary::new(), true);
-    let (_, result) = with_ner.masked("山田太郎さん");
+    let (_, result) = with_ner.masked("山田太郎さん").unwrap();
     assert!(result.entities.iter().any(|e| e.source == Source::Ner));
 
     let mut without_ner = Session::new(UserDictionary::new(), false);
-    let (_, result) = without_ner.masked("山田太郎さん");
+    let (_, result) = without_ner.masked("山田太郎さん").unwrap();
     assert!(result.entities.iter().all(|e| e.source != Source::Ner));
 }
 
@@ -429,7 +433,7 @@ fn canary_recall_gate_full_pipeline() {
     let mut session = Session::new(UserDictionary::new(), true);
     let mut misses: Vec<String> = Vec::new();
     for canary in canaries() {
-        let (_, result) = session.masked(&canary.text);
+        let (_, result) = session.masked(&canary.text).unwrap();
         for (kind, value) in &canary.expected {
             let hit = result
                 .entities
@@ -447,7 +451,7 @@ fn canary_recall_gate_full_pipeline() {
 fn canary_no_raw_pii_in_masked_output() {
     let mut session = Session::new(UserDictionary::new(), true);
     for canary in canaries() {
-        let (masked, _) = session.masked(&canary.text);
+        let (masked, _) = session.masked(&canary.text).unwrap();
         for (_, value) in &canary.expected {
             assert!(
                 !masked.contains(value.as_str()),
@@ -462,7 +466,7 @@ fn canary_no_raw_pii_in_masked_output() {
 fn canary_masked_text_keeps_one_token_per_entity() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[0];
-    let (masked, _) = session.masked(&canary.text);
+    let (masked, _) = session.masked(&canary.text).unwrap();
     assert_eq!(masked.matches('⟦').count(), masked.matches('⟧').count());
     assert_eq!(
         masked.matches('⟦').count(),
@@ -475,7 +479,7 @@ fn canary_masked_text_keeps_one_token_per_entity() {
 fn canary_restore_round_trip() {
     let mut session = Session::new(UserDictionary::new(), true);
     for canary in canaries() {
-        let (masked, _) = session.masked(&canary.text);
+        let (masked, _) = session.masked(&canary.text).unwrap();
         let out = session.unmasked(&masked);
         for (_, value) in &canary.expected {
             assert!(
@@ -492,7 +496,7 @@ fn canary_restore_round_trip() {
 fn canary_streaming_restore_matches_batch() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[1];
-    let (masked, _) = session.masked(&canary.text);
+    let (masked, _) = session.masked(&canary.text).unwrap();
     let chars: Vec<char> = masked.chars().collect();
     let mut emitted = String::new();
     let mut pending = String::new();
@@ -516,7 +520,7 @@ fn canary_streaming_restore_matches_batch() {
 fn audit_catches_model_mentioning_raw_pii() {
     let mut session = Session::new(UserDictionary::new(), true);
     let canary = &canaries()[0];
-    let (masked, _) = session.masked(&canary.text);
+    let (masked, _) = session.masked(&canary.text).unwrap();
     let out = session.unmasked(&format!("{masked} 本名で言いますと山田太郎です。"));
     assert!(out
         .warnings

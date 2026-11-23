@@ -399,6 +399,8 @@ dictionary = "dictionary.tsv" # extra dictionary (TSV: term<TAB>type); additions
 [session]
 scope = "global"            # "global": pseudonyms stay stable across the conversation
                             # "request": a fresh table per request
+capacity = 256              # entities one session can bind; the request that
+                            # exceeds it fails with mask_session_full (400)
 
 [gateway]
 token = ""                   # token handed to clients (empty = no auth, localhost only)

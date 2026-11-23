@@ -169,6 +169,10 @@ Windows, macOS and Linux.
   `message_stop`
 - Deny-by-default routing: only supported endpoints and
   `gateway.passthrough_allowlist` paths are forwarded; everything else is 403
+- A session binds pseudonyms for at most `session.capacity` entities (default
+  256). Going over fails that one request with `mask_session_full` (400) and
+  sends nothing upstream; a poisoned session lock is recovered, not inherited,
+  so the gateway keeps answering
 - Pre-flight leak gate: the whole payload and forwarded headers are walked
   before sending; any real value the session has detected discards the request
   (fail-closed)

@@ -283,7 +283,11 @@ fn session_for(config: &GatewayConfig) -> Result<Session> {
             .with_context(|| format!("cannot load dictionary {}", path.display()))?,
         None => UserDictionary::new(),
     };
-    Ok(Session::new(dictionary, config.use_ner))
+    Ok(Session::with_capacity(
+        dictionary,
+        config.use_ner,
+        config.session_capacity,
+    ))
 }
 
 fn gateway_url(config: &GatewayConfig, override_url: Option<&str>) -> String {
@@ -632,7 +636,7 @@ fn cmd_check(args: &[String], config: &GatewayConfig, colorize: bool) -> Result<
         return Ok(1);
     };
     let mut session = session_for(config)?;
-    let (masked, result) = session.masked(&text);
+    let (masked, result) = session.masked(&text)?;
     println!("{masked}");
     eprintln!("{}", paint("[mask check]", DIM, colorize));
     eprintln!("{}", render_check(&masked, &result, colorize));
@@ -651,7 +655,7 @@ fn cmd_audit(
     let multiple = inputs.len() > 1;
     let mut suspicious = 0usize;
     for (label, text) in &inputs {
-        let (masked, result) = session.masked(text);
+        let (masked, result) = session.masked(text)?;
         let hints = scan_suspicions(text, &result);
         suspicious += hints.len();
         if !no_output {
