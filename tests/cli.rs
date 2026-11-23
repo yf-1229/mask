@@ -7,7 +7,7 @@ mod common;
 
 use std::process::Command;
 
-use mask::cli::{render_check, render_status};
+use mask::cli::{render_check, render_session, render_status};
 use mask::detect::detect;
 use mask::detect::dictionary::UserDictionary;
 use mask::types::EntityType;
@@ -107,6 +107,40 @@ fn render_check_handles_an_empty_result() {
     let result = detect("特に何もありません", None, None);
     let text = render_check("", &result, false);
     assert!(text.contains("nothing found"), "{text}");
+}
+
+#[test]
+fn render_session_truncates_cells_and_names_request_scope() {
+    let long = "東京都千代田区丸の内一丁目一番一号のとても長い住所";
+    let snapshot = json!({
+        "session_scope": "global",
+        "capacity": 256,
+        "remaining": 255,
+        "records": 1,
+        "total_occurrences": 2,
+        "entries": [{
+            "kind": "address",
+            "token": "⟦住所9⟧",
+            "occurrences": 2,
+            "value_sha256_prefix": "abcdef01",
+            "value": long,
+        }],
+    });
+    let text = render_session(&snapshot, false, true, false);
+    assert!(text.contains("id pool 255/256 left"), "{text}");
+    assert!(text.contains('…'), "{text}");
+    assert!(!text.contains(long), "{text}");
+    let full = render_session(&snapshot, true, true, false);
+    assert!(full.contains(long), "{full}");
+
+    // Values stay hashed unless asked; the prefix is stable and prefixed.
+    let hashed = render_session(&snapshot, false, false, false);
+    assert!(hashed.contains("sha256:abcdef01"), "{hashed}");
+    assert!(!hashed.contains("東京都"), "{hashed}");
+
+    // Request scope has no table to read: say so instead of showing zeros.
+    let request = render_session(&json!({"session_scope": "request"}), false, false, false);
+    assert!(request.contains("nothing persists"), "{request}");
 }
 
 #[test]
@@ -234,7 +268,9 @@ fn binary_reports_a_missing_config_file() {
 fn binary_help_lists_every_entrance() {
     let output = binary().arg("--help").output().expect("cannot run mask");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    for command in ["check", "audit", "chat", "status", "serve", "dict"] {
+    for command in [
+        "check", "audit", "chat", "status", "session", "serve", "dict",
+    ] {
         assert!(stdout.contains(command), "missing {command} in {stdout}");
     }
 }
@@ -319,6 +355,81 @@ mod live {
         // the model only ever saw the token
         assert!(h.upstream.sent_raw().contains('⟦'));
         assert!(!h.upstream.sent_raw().contains("山田太郎"));
+    }
+
+    #[tokio::test]
+    async fn session_reads_the_live_mapping_table() {
+        let mut gateway = config();
+        gateway.gateway_token = "client-token".to_string();
+        gateway.admin_require_human = true;
+        gateway.admin_human_token = Some("operator-token".to_string());
+        let h = common::start_with(gateway, common::MockKind::Echo).await;
+        // populate the session through the proxy
+        let response = h
+            .post_json_auth(
+                "/v1/chat/completions",
+                serde_json::json!({
+                    "model": "m",
+                    "messages": [{"role": "user", "content": "山田太郎さんに連絡"}],
+                }),
+                "client-token",
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+
+        // The CLI needs the gateway token for the admin gate; the operator
+        // token comes from the flag (the terminal is not scriptable).
+        let toml = common::temp_file("session.toml", "[gateway]\ntoken = \"client-token\"\n");
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_mask"))
+            .args([
+                "--no-color",
+                "--config",
+                toml.to_str().unwrap(),
+                "session",
+                "--url",
+            ])
+            .arg(&h.base_url)
+            .args(["--admin-token", "operator-token"])
+            .output()
+            .await
+            .expect("cannot run mask");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        assert!(output.status.success(), "{stdout}{stderr}");
+        assert!(stdout.contains("mask session"), "{stdout}{stderr}");
+        assert!(stdout.contains("人名") && stdout.contains('⟦'), "{stdout}");
+        assert!(stdout.contains("sha256:"), "{stdout}");
+        assert!(stdout.contains("id pool"), "{stdout}");
+        assert!(!stdout.contains("山田太郎"), "{stdout}");
+
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_mask"))
+            .args(["--config", toml.to_str().unwrap(), "session", "--url"])
+            .arg(&h.base_url)
+            .args(["--admin-token", "operator-token", "--json"])
+            .output()
+            .await
+            .expect("cannot run mask");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let snapshot: serde_json::Value = serde_json::from_str(&stdout).expect("json");
+        assert_eq!(snapshot["entries"][0]["kind"], "person");
+        assert!(snapshot["entries"][0].get("value").is_none(), "{stdout}");
+
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_mask"))
+            .args([
+                "--no-color",
+                "--config",
+                toml.to_str().unwrap(),
+                "session",
+                "--url",
+            ])
+            .arg(&h.base_url)
+            .args(["--admin-token", "operator-token", "--values"])
+            .output()
+            .await
+            .expect("cannot run mask");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        assert!(output.status.success(), "{stdout}");
+        assert!(stdout.contains("山田太郎"), "{stdout}");
     }
 
     #[tokio::test]

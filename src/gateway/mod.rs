@@ -57,9 +57,9 @@ use crate::gateway::agent::{
 use crate::gateway::indicators::{
     build_posture, request_headers, Count, Indicators, RequestMeasure,
 };
-use crate::gateway::leakguard::{find_header_leaks, find_leaks, Leak};
+use crate::gateway::leakguard::{find_header_leaks, find_leaks, hash_prefix, Leak};
 use crate::gateway::sharing::{envelope_fingerprint, seal_with, unseal, Envelope, UnsealError};
-use crate::replace::SessionFull;
+use crate::replace::{PseudonymMap, SessionFull};
 use crate::restore::restore_stream_buffer;
 use crate::session::Session;
 
@@ -294,6 +294,7 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
         .route("/v1/messages", post(messages))
         .route("/admin/export", post(admin_export))
         .route("/admin/import", post(admin_import))
+        .route("/admin/session", get(admin_session))
         .route("/admin/dictionary/reload", post(admin_dictionary_reload))
         .route(
             "/admin/leak/false-positive",
@@ -1483,6 +1484,112 @@ async fn admin_leak_false_positive(State(state): State<AppState>, request: Reque
         "operator counted a false block"
     );
     json_response(StatusCode::OK, json!({"leak_false_positives": total}))
+}
+
+/// Read the live session's mapping table: what has this process masked?
+///
+/// Raw values are the reason this endpoint is not `/status`. It is therefore
+/// local-only *regardless* of `gateway.admin_allow_remote` (403 otherwise),
+/// and it sits behind the same operator gate as export/import. Values are
+/// hashed unless the caller explicitly asks with `?values=true`; even then
+/// only this response carries them — the log line is counts only.
+async fn admin_session(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(denied) = session_authorized(&state, &request) {
+        return denied;
+    }
+    let reveal_values = query_flag(request.uri().query(), "values");
+    let snapshot = match &state.session {
+        Some(shared) => {
+            let session = shared.lock().unwrap_or_else(|e| e.into_inner());
+            session_snapshot(Some(&session.pseudonyms), &state.config, reveal_values)
+        }
+        None => session_snapshot(None, &state.config, reveal_values),
+    };
+    tracing::info!(
+        scope = state.config.session_scope.as_str(),
+        records = snapshot["records"].as_u64().unwrap_or(0),
+        values = reveal_values,
+        "admin session snapshot"
+    );
+    json_response(StatusCode::OK, snapshot)
+}
+
+/// The session view is private to this machine: loopback client, then the
+/// normal operator gate. Every refusal is a 403 so the response does not
+/// distinguish "remote" from "missing token"; the body code still names why.
+fn session_authorized(state: &AppState, request: &Request) -> Option<Response> {
+    let client = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0);
+    if !is_loopback(client) {
+        state.indicators.incr(Count::AdminGateRefusals);
+        state.indicators.incr(Count::RequestsBlocked);
+        tracing::warn!(?client, "session view refused from non-loopback client");
+        return Some(error_response(
+            StatusCode::FORBIDDEN,
+            "mask_session_local_only",
+            "the session view is local-only: connect over loopback",
+        ));
+    }
+    let denied = admin_authorized(state, request)?;
+    let (mut parts, body) = denied.into_parts();
+    if parts.status == StatusCode::UNAUTHORIZED {
+        parts.status = StatusCode::FORBIDDEN;
+    }
+    Some(Response::from_parts(parts, body))
+}
+
+fn query_flag(query: Option<&str>, name: &str) -> bool {
+    query.is_some_and(|query| {
+        query.split('&').any(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            key == name && matches!(value, "true" | "1")
+        })
+    })
+}
+
+/// Machine-readable session table. Stable keys: `session_scope`, `capacity`,
+/// `remaining`, `records`, `total_occurrences`, and one `entries` object per
+/// binding (`kind`, `token`, `occurrences`, `value_sha256_prefix`, and `value`
+/// only when the operator asked for it).
+fn session_snapshot(map: Option<&PseudonymMap>, config: &GatewayConfig, values: bool) -> Value {
+    let scope = config.session_scope.as_str();
+    let Some(map) = map else {
+        return json!({
+            "session_scope": scope,
+            "capacity": Value::Null,
+            "remaining": Value::Null,
+            "records": 0,
+            "total_occurrences": 0,
+            "entries": [],
+        });
+    };
+    let records = map.records();
+    let total_occurrences: u64 = records.iter().map(|record| record.occurrences).sum();
+    let entries: Vec<Value> = records
+        .iter()
+        .map(|record| {
+            let mut entry = json!({
+                "kind": record.kind.as_str(),
+                "token": record.token,
+                "occurrences": record.occurrences,
+                "value_sha256_prefix": hash_prefix(record.value.as_bytes()),
+            });
+            if values {
+                entry["value"] = json!(record.value);
+            }
+            entry
+        })
+        .collect();
+    json!({
+        "session_scope": scope,
+        "capacity": map.capacity(),
+        "remaining": map.remaining(),
+        "records": records.len(),
+        "total_occurrences": total_occurrences,
+        "entries": entries,
+    })
 }
 
 fn blocked_status(response: &Response) -> StatusCode {
