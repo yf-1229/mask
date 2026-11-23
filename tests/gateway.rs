@@ -257,9 +257,55 @@ async fn pii_in_unmasked_field_is_blocked_before_sending() {
     let payload: Value = response.json().await.unwrap();
     let error = &payload["error"];
     assert_eq!(error["code"], "mask_leak_blocked");
-    assert_eq!(error["fields"], json!(["user"]));
-    assert_eq!(error["values"], json!(["山田太郎"]));
+    assert_eq!(error["fields"], json!(["key#04f8996d"]));
+    assert!(
+        error.get("values").is_none(),
+        "raw values in response: {error}"
+    );
+    assert_eq!(
+        error["leaks"],
+        json!([{
+            "path": "key#04f8996d",
+            "value_sha256_prefix": "6b0e1c8c",
+        }])
+    );
+    assert!(!payload.to_string().contains("山田太郎"), "{payload}");
     assert!(h.upstream.last().is_none(), "request left the process");
+}
+
+#[tokio::test]
+async fn key_leak_is_hashed_in_the_log_and_the_response() {
+    let h = start_with_dict(&[("山田太郎", "person")]).await;
+    let mut body = chat_body("山田太郎さんの件");
+    body["metadata"] = json!({"山田太郎": "note"});
+    let response = h.post_json("/v1/chat/completions", body).await;
+    assert_eq!(response.status(), 400);
+    let payload: Value = response.json().await.unwrap();
+    let error = &payload["error"];
+    assert_eq!(error["code"], "mask_leak_blocked");
+    // the raw key appears nowhere in the client-visible error
+    assert!(!payload.to_string().contains("山田太郎"), "{payload}");
+    assert!(error.get("values").is_none(), "{error}");
+    assert!(
+        error["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field.as_str().unwrap().ends_with("(key)")),
+        "the key hit must stay visible as a hashed path: {error}"
+    );
+
+    // the log line is rendered from the same structured path; this is the
+    // shape the gate walked (the masked request keeps the unknown key)
+    let values = vec!["山田太郎".to_string()];
+    let leaks =
+        mask::gateway::leakguard::find_leaks(&json!({"metadata": {"山田太郎": "note"}}), &values);
+    assert_eq!(leaks.len(), 1, "{leaks:?}");
+    let line = leaks[0].log_line("v1/chat");
+    assert!(!line.contains("山田太郎"), "{line}");
+    assert!(!line.contains("metadata"), "{line}");
+    assert!(line.contains("key#") && line.contains("(key)"), "{line}");
+    assert!(line.contains("sha256:6b0e1c8c"), "{line}");
 }
 
 #[tokio::test]
@@ -304,9 +350,14 @@ async fn pii_in_forwarded_header_is_blocked() {
     let payload: Value = response.json().await.unwrap();
     assert_eq!(payload["error"]["code"], "mask_leak_blocked");
     let fields = payload["error"]["fields"].as_array().unwrap().clone();
+    // the header name is a key too: hashed, never printed raw
     assert!(
-        fields.contains(&json!("header:x-title")),
+        fields.contains(&json!("header.key#ec4d3f7d")),
         "fields: {fields:?}"
+    );
+    assert!(
+        !payload.to_string().contains("taro@example.com"),
+        "{payload}"
     );
     assert!(h.upstream.last().is_none());
 }

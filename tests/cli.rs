@@ -161,6 +161,30 @@ fn binary_check_omits_explain_by_default() {
 }
 
 #[test]
+fn binary_check_explain_is_the_opt_in_for_raw_values() {
+    let plain = binary()
+        .args(["check", "--no-color", "山田太郎さん"])
+        .output()
+        .expect("cannot run mask");
+    let plain_stderr = String::from_utf8_lossy(&plain.stderr).to_string();
+    assert!(!plain_stderr.contains("山田太郎"), "{plain_stderr}");
+
+    let explained = binary()
+        .args(["check", "--no-color", "--explain", "山田太郎さん"])
+        .output()
+        .expect("cannot run mask");
+    assert!(explained.status.success());
+    let stdout = String::from_utf8_lossy(&explained.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&explained.stderr).to_string();
+    // stdout stays the masked, pipeable text
+    assert!(stdout.contains('⟦'), "{stdout}");
+    assert!(!stdout.contains("山田太郎"), "{stdout}");
+    // the raw value is stderr-only and only with --explain
+    assert!(stderr.contains("explain"), "{stderr}");
+    assert!(stderr.contains("山田太郎"), "{stderr}");
+}
+
+#[test]
 fn binary_check_reads_stdin() {
     use std::io::Write;
     use std::process::Stdio;

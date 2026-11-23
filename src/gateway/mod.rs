@@ -45,7 +45,6 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::detect::dictionary::{MergeReport, UserDictionary};
@@ -807,9 +806,10 @@ fn record_measure(state: &AppState, measure: &RequestMeasure) {
 
 /// Refuse the request if a known raw value would leave the process.
 ///
-/// The client-facing error echoes the offending values: the client is the
-/// trusted local user and sent them in the first place. Logs carry only field
-/// paths and a value hash, never the raw value.
+/// Neither the log line nor the client-facing error carries a raw value or a
+/// raw object key: both are rendered from the structured [`Leak`] path (keys as
+/// `key#<sha256-prefix>`) plus a value hash prefix. The local opt-in that
+/// reveals raw values is `mask check --explain`; this path is always redacted.
 fn gate(
     state: &AppState,
     session: &Session,
@@ -827,9 +827,7 @@ fn gate(
         return None;
     }
     for leak in &leaks {
-        let digest = Sha256::digest(leak.value.as_bytes());
-        let hash: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
-        tracing::warn!("leak gate: {source} {} (value sha256:{hash})", leak.path);
+        tracing::warn!("{}", leak.log_line(source));
     }
     if state.config.leak_gate == LeakGate::Warn {
         state.indicators.incr(Count::LeakWarnings);
@@ -837,16 +835,22 @@ fn gate(
     }
     state.indicators.incr(Count::LeakBlocks);
     state.indicators.incr(Count::RequestsBlocked);
-    let fields: Vec<String> = leaks.iter().map(|l| l.path.clone()).collect();
-    let values: Vec<String> = leaks.iter().map(|l| l.value.clone()).collect();
+    let fields: Vec<String> = leaks.iter().map(Leak::path_string).collect();
+    let leaks_view: Vec<GateLeak> = leaks
+        .iter()
+        .map(|leak| GateLeak {
+            path: leak.path_string(),
+            value_sha256_prefix: leak.value_sha256_prefix.clone(),
+        })
+        .collect();
     let mut response = json_response(
         StatusCode::BAD_REQUEST,
         json!({
             "error": {
                 "message": "mask gateway: unmasked PII detected in the request; nothing was sent to the upstream",
                 "code": "mask_leak_blocked",
-                "fields": fields,
-                "values": values,
+                "fields": &fields,
+                "leaks": &leaks_view,
             }
         }),
     );
@@ -859,7 +863,7 @@ fn gate(
                 .to_string(),
         code: "mask_leak_blocked".to_string(),
         fields,
-        values,
+        leaks: leaks_view,
     });
     Some(response)
 }
@@ -1033,7 +1037,7 @@ async fn messages(State(state): State<AppState>, request: Request) -> Response {
             blocked_status(&blocked),
             "invalid_request_error",
             err.0.as_str(),
-            json!({"mask_code": err.1, "mask_fields": err.2, "mask_values": err.3}),
+            json!({"mask_code": err.1, "mask_fields": err.2, "mask_leaks": err.3}),
         );
     }
 
@@ -1421,7 +1425,7 @@ fn blocked_error(response: &Response) -> (String, Value, Value, Value) {
                 details.message.clone(),
                 json!(details.code),
                 json!(details.fields),
-                json!(details.values),
+                json!(details.leaks),
             )
         })
         .unwrap_or((
@@ -1432,6 +1436,14 @@ fn blocked_error(response: &Response) -> (String, Value, Value, Value) {
         ))
 }
 
+/// One blocked leak in the client-facing shape. Paths carry hashed keys and a
+/// value hash prefix; the raw value never appears.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GateLeak {
+    pub path: String,
+    pub value_sha256_prefix: String,
+}
+
 /// Details attached to a leak-block response so the Anthropic entrance can
 /// re-wrap them without re-reading the body.
 #[derive(Clone, Debug)]
@@ -1439,7 +1451,7 @@ pub struct GateDetails {
     pub message: String,
     pub code: String,
     pub fields: Vec<String>,
-    pub values: Vec<String>,
+    pub leaks: Vec<GateLeak>,
 }
 
 /// Forward allowlisted paths verbatim; refuse everything else.
