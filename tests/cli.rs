@@ -124,6 +124,43 @@ fn binary_check_masks_from_the_argument() {
 }
 
 #[test]
+fn binary_check_explain_names_the_rule_without_changing_the_output() {
+    let output = binary()
+        .args([
+            "check",
+            "--no-color",
+            "--explain",
+            "山田太郎さんに確認。佐藤花子も来る。",
+        ])
+        .output()
+        .expect("cannot run mask");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    // Detection output is the same masked text; --explain adds stderr only.
+    assert!(stdout.contains('⟦'), "stdout: {stdout}");
+    assert!(!stdout.contains("山田太郎"), "stdout: {stdout}");
+    assert!(stderr.contains("[explain]"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("family+given name + honorific"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("family+given name"), "stderr: {stderr}");
+    assert!(stderr.contains("ner"), "stderr: {stderr}");
+}
+
+#[test]
+fn binary_check_omits_explain_by_default() {
+    let output = binary()
+        .args(["check", "--no-color", "山田太郎さん"])
+        .output()
+        .expect("cannot run mask");
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(!stderr.contains("[explain]"), "stderr: {stderr}");
+}
+
+#[test]
 fn binary_check_reads_stdin() {
     use std::io::Write;
     use std::process::Stdio;

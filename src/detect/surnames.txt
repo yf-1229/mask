@@ -1,6 +1,12 @@
 # Japanese surnames for the offline name detector, one per line.
 # Two to four characters; one-character surnames are too ambiguous to match
 # without grammar. Data, not code: adding a reviewed name is a one-line change.
+# A surname is only masked with a context (honorific, family+given join, or a
+# structured name field); ambiguous everyday words also belong in stoplist.txt.
+# Rule for contributors: every addition to this file must come with a
+# false-positive case in tests/corpus/false_positive.txt (and a positive canary
+# case when one is expected). A lexicon word without its negative case is how
+# 「出口は混んでいる」 got masked.
 # Sorted by codepoint for review; keep it sorted and duplicate-free.
 三上
 三好

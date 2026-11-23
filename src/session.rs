@@ -43,6 +43,12 @@ impl Session {
         restored
     }
 
+    /// Same detection as [`Self::masked`], with the accepting rule per span.
+    /// Read-only: it cannot change the mapping table.
+    pub fn explain(&self, text: &str) -> Vec<crate::detect::Explanation> {
+        crate::detect::explain(text, Some(&self.dictionary), self.ner.as_ref())
+    }
+
     pub fn ner_enabled(&self) -> bool {
         self.ner.is_some()
     }
