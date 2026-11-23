@@ -38,6 +38,9 @@ pub enum MockKind {
     /// Streaming, first token-sized chunk then a delayed second chunk. Used to
     /// prove the gateway does not wait for upstream completion.
     SlowStream,
+    /// Streaming tool call whose JSON arguments are split across two deltas,
+    /// with the boundary inside a pseudonym token.
+    StreamToolCalls,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +327,29 @@ fn upstream_response(kind: MockKind, body: &Value) -> Response {
     };
 
     if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+        if kind == MockKind::StreamToolCalls {
+            let token = first_token(&content).unwrap_or_default();
+            let arguments = json!({"who": token, "note": "折返し"}).to_string();
+            // Split just before the closing bracket: the two deltas only form
+            // a complete token (and a complete JSON document) once joined.
+            let split = arguments.find('⟧').unwrap_or(arguments.len());
+            let (head, tail) = arguments.split_at(split);
+            return sse(
+                &[
+                    json!({"role": "assistant", "content": Value::Null, "tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function",
+                         "function": {"name": "lookup", "arguments": ""}}
+                    ]}),
+                    json!({"tool_calls": [
+                        {"index": 0, "function": {"arguments": head}}
+                    ]}),
+                    json!({"tool_calls": [
+                        {"index": 0, "function": {"arguments": tail}}
+                    ]}),
+                ],
+                &model,
+            );
+        }
         let (head, tail) = match kind {
             MockKind::SplitAfterOpen | MockKind::SplitInside | MockKind::SplitBeforeClose => {
                 let at = split_point(&content, kind);

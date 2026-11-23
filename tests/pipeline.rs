@@ -249,13 +249,38 @@ fn same_value_same_token() {
 }
 
 #[test]
-fn variant_unification_prevents_fragmentation() {
-    let mut map = PseudonymMap::new();
-    let full = map.assign(EntityType::Person, "山田太郎").unwrap();
-    let short = map.assign(EntityType::Person, "山田").unwrap();
-    assert_eq!(short.token, full.token);
-    // the mapping keeps the longer variant for restoration
-    assert_eq!(map.restore_value(&full.token), Some("山田太郎"));
+fn containment_variants_stay_distinct_and_restore_exactly() {
+    // Both detection orders: short first, then long, and the reverse. Neither
+    // may reuse the other's token, and each token must restore its own value.
+    for order in [["田中", "田中町"], ["田中町", "田中"]] {
+        let mut map = PseudonymMap::new();
+        let first = map.assign(EntityType::Person, order[0]).unwrap();
+        let second = map.assign(EntityType::Person, order[1]).unwrap();
+        assert_ne!(first.token, second.token, "order {order:?}");
+        assert_eq!(map.restore_value(&first.token), Some(order[0]));
+        assert_eq!(map.restore_value(&second.token), Some(order[1]));
+        let out = restore(&format!("{}と{}", first.token, second.token), &map);
+        assert_eq!(out.text, format!("{}と{}", order[0], order[1]));
+    }
+}
+
+#[test]
+fn short_and_long_names_share_one_session() {
+    let mut session = session_with(&[("田中", EntityType::Person), ("田中町", EntityType::Person)]);
+
+    // Both values in one text: two distinct tokens, both restored.
+    let text = "田中さんと田中町";
+    let (masked, _) = session.masked(text).unwrap();
+    assert_eq!(masked.matches('⟦').count(), 2, "{masked}");
+    assert_eq!(session.unmasked(&masked).text, text);
+
+    // Cross-request order too: the long value first, then the short one.
+    let mut reverse = session_with(&[("田中", EntityType::Person), ("田中町", EntityType::Person)]);
+    let (long, _) = reverse.masked("田中町さん").unwrap();
+    let (short, _) = reverse.masked("田中さん").unwrap();
+    assert_ne!(long, short);
+    assert_eq!(reverse.unmasked(&long).text, "田中町さん");
+    assert_eq!(reverse.unmasked(&short).text, "田中さん");
 }
 
 #[test]

@@ -12,8 +12,9 @@
 //!   restored as it arrives and forwarded immediately. A token split across
 //!   network chunks is held in a tail buffer until the next chunk completes it
 //!   (or the upstream ends and the tail is flushed).
-//! - `tool_calls` function arguments are masked (JSON strings are parsed and
-//!   every string inside is masked).
+//! - `tool_calls` function arguments are masked on the way in and restored on
+//!   the way out (JSON strings are parsed, every string inside is masked or
+//!   restored, then re-serialized) on both entrances and both paths.
 //! - Every other path is refused unless allowlisted in gateway config (deny by
 //!   default); allowlisted paths are forwarded but still pass the outbound leak
 //!   gate.
@@ -769,8 +770,54 @@ fn restore_text(text: &str, session: &Session, measure: &mut RequestMeasure) -> 
     restored.text
 }
 
-/// Restore pseudonyms in `choices[*].message.content`, in place.
-pub fn restore_chat_response(data: &mut Value, session: &Session, measure: &mut RequestMeasure) {
+/// Restore tokens inside one OpenAI tool call's `function.arguments`.
+///
+/// The arguments are a JSON document carried as a string, so the tokens hide
+/// inside its values: parse, restore every string, re-serialize. Invalid JSON
+/// is returned byte-for-byte — rewriting it would hand the local tool a
+/// different argument than the model emitted — and logged as a warning.
+fn restore_arguments_json(
+    raw: &str,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) -> String {
+    let Ok(args) = serde_json::from_str::<Value>(raw) else {
+        tracing::warn!("restore: tool call arguments are not valid JSON; kept verbatim");
+        return raw.to_string();
+    };
+    serde_json::to_string(&restored_strings(&args, session, measure)).unwrap_or_else(|error| {
+        tracing::warn!(%error, "restore: cannot re-serialize tool call arguments");
+        raw.to_string()
+    })
+}
+
+/// Restore `tool_calls[*].function.arguments` in place.
+///
+/// Shared by the non-streaming response path and the SSE collector so the two
+/// cannot drift; a token that survives one path must not survive the other.
+fn restore_tool_calls(calls: &mut [Value], session: &mut Session, measure: &mut RequestMeasure) {
+    for call in calls {
+        let Some(arguments) = call
+            .get_mut("function")
+            .and_then(Value::as_object_mut)
+            .and_then(|function| function.get_mut("arguments"))
+        else {
+            continue;
+        };
+        let Value::String(raw) = arguments else {
+            continue;
+        };
+        *arguments = Value::String(restore_arguments_json(raw, session, measure));
+    }
+}
+
+/// Restore pseudonyms in `choices[*].message.content` and tool arguments, in
+/// place.
+pub fn restore_chat_response(
+    data: &mut Value,
+    session: &mut Session,
+    measure: &mut RequestMeasure,
+) {
     let Some(choices) = data.get_mut("choices").and_then(Value::as_array_mut) else {
         return;
     };
@@ -781,11 +828,13 @@ pub fn restore_chat_response(data: &mut Value, session: &Session, measure: &mut 
         if !message.is_object() {
             continue;
         }
-        let Some(content) = message.get("content").and_then(Value::as_str) else {
-            continue;
-        };
-        let restored = restore_text(content, session, measure);
-        message["content"] = Value::String(restored);
+        if let Some(content) = message.get("content").and_then(Value::as_str) {
+            let restored = restore_text(content, session, measure);
+            message["content"] = Value::String(restored);
+        }
+        if let Some(Value::Array(calls)) = message.get_mut("tool_calls") {
+            restore_tool_calls(calls, session, measure);
+        }
     }
 }
 
@@ -1765,7 +1814,7 @@ impl StreamRestorer {
     }
 
     fn finish_openai(&mut self, out: &mut String) {
-        let calls = merged_tool_calls(&self.tool_calls);
+        let mut calls = merged_tool_calls(&self.tool_calls);
         let has_calls = !calls.is_empty();
         if !self.started {
             self.started = true;
@@ -1774,6 +1823,7 @@ impl StreamRestorer {
             );
         }
         if has_calls {
+            restore_tool_calls(&mut calls, &mut self.session, &mut self.measure);
             out.push_str(&self.openai_chunk(json!({"tool_calls": calls}), Value::Null));
         }
         let reason = self
@@ -2022,6 +2072,50 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collects tracing output so a test can assert a warning was emitted.
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Broken arguments must reach the tool byte-for-byte and be reported, not
+    /// silently rewritten into some other JSON value.
+    #[test]
+    fn invalid_tool_arguments_are_kept_verbatim_with_a_warning() {
+        let mut session = Session::new(UserDictionary::new(), false);
+        let mut measure = RequestMeasure::default();
+        let raw = r#"{"who": "⟦人名1⟧""#;
+        let log = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_writer(log.clone())
+            .finish();
+        let restored = tracing::subscriber::with_default(subscriber, || {
+            restore_arguments_json(raw, &mut session, &mut measure)
+        });
+        assert_eq!(restored, raw);
+        let logged = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(logged.contains("not valid JSON"), "{logged}");
+    }
 
     /// A panic while the session lock was held used to poison it, and every
     /// later request then panicked in `with_session`. It must recover.

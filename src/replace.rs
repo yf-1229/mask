@@ -3,9 +3,10 @@
 //! Token format: `⟦<label><pool id>⟧`, e.g. `⟦人名17⟧`.
 //!
 //! Invariants enforced here:
-//! - One value per entity type maps to exactly one token per session; variants
-//!   ("山田" vs "山田太郎") unify onto the token of whichever variant contains
-//!   the other, preventing entity fragmentation.
+//! - One value per entity type maps to exactly one token per session. Matching
+//!   is exact (after NFKC normalization): "田中" and "田中町" are distinct
+//!   entities with distinct tokens, so restoring a token can never turn one
+//!   raw value into another.
 //! - The id pool is shuffled per session so token ids carry no positional
 //!   meaning ("人名1" is not "the first person that appeared").
 //! - The table lives only in process memory. The only way it leaves is the
@@ -104,9 +105,9 @@ pub struct PseudonymMap {
     pool: Vec<u32>,
     capacity: u32,
     records: Vec<(EntityType, String, TokenRecord)>,
-    /// Every raw value ever assigned (NFKC keys), containment variants
-    /// included. Consumed by the gateway's outbound leak gate; like the rest of
-    /// the table it never leaves the process.
+    /// Every raw value ever assigned (NFKC keys). Consumed by the gateway's
+    /// outbound leak gate; like the rest of the table it never leaves the
+    /// process.
     seen: BTreeSet<String>,
 }
 
@@ -133,8 +134,10 @@ impl PseudonymMap {
         }
     }
 
-    /// Get-or-create the token for an entity occurrence, unifying containment
-    /// variants (substring containment => same token).
+    /// Get-or-create the token for an entity occurrence. Only an exact value
+    /// (NFKC-normalized) reuses a binding: containment is *not* unification
+    /// ("田中" inside "田中町" is a different entity, and merging them would
+    /// restore one raw value as the other).
     ///
     /// Returns [`SessionFull`] when every id is bound; the caller fails that
     /// request instead of panicking (a panic here used to poison the shared
@@ -150,12 +153,7 @@ impl PseudonymMap {
             if rec.kind != kind {
                 continue;
             }
-            let rec_key = normalize_key(&rec.value);
-            if rec_key.contains(key_value.as_str()) || key_value.contains(rec_key.as_str()) {
-                // unify; keep the longer (more specific) value for restore
-                if key_value.chars().count() > rec_key.chars().count() {
-                    rec.value = raw_value.to_string();
-                }
+            if normalize_key(&rec.value) == key_value {
                 rec.occurrences += 1;
                 return Ok(rec.clone());
             }
