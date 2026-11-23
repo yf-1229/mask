@@ -172,9 +172,13 @@ surfaces, always as **numbers only** — never values, tokens or entity paths.
    embeddings.
 3. **Pre-flight leak gate** — immediately before sending, the whole payload
    (including keys) and forwarded headers are walked. If any real value the
-   session has ever detected is still present (NFKC-normalized, substring match),
-   the request is discarded (fail-closed). A masking miss, an unknown field and a
-   re-appearing value all converge on the same failure: not sent.
+   session has ever detected is still present (NFKC-normalized, whole-word
+   match), the request is discarded (fail-closed). A masking miss, an unknown
+   field and a re-appearing value all converge on the same failure: not sent.
+   Matching is whole-word so a value inside a longer word is not a re-mention
+   (`田中` in `田中町`), and a two-character value is judged in body text only
+   (`content`, `prompt`, …) — never in keys, headers or metadata such as
+   `model`/`stop`.
 4. **Gateway token** — set `gateway.token` and clients must present it as their
    API key. Protection when listening on a LAN; comparison is constant-time.
 5. **Canary tests** — integration tests (`tests/gateway.rs`,

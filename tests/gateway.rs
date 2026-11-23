@@ -383,6 +383,82 @@ async fn allowlisted_passthrough_is_leak_gated() {
     assert_eq!(payload["error"]["code"], "mask_leak_blocked");
 }
 
+#[tokio::test]
+async fn compound_place_name_passes_with_and_without_session_history() {
+    use mask::gateway::config::GatewayConfig;
+    // NER detects 田中 from the honorific on turn one; 田中町 is a place, not a
+    // person, so turn two must pass whether or not the session has history.
+    let config = GatewayConfig {
+        use_ner: true,
+        ..base_config()
+    };
+    let warm = start_with(config.clone(), MockKind::Echo).await;
+    let response = warm
+        .post_json(
+            "/v1/chat/completions",
+            chat_body("田中さんに確認してください。"),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+
+    let review = chat_body("田中町に住む。");
+    let response = warm.post_json("/v1/chat/completions", review.clone()).await;
+    assert_eq!(
+        response.status(),
+        200,
+        "session history turned 田中町 into a leak"
+    );
+    assert!(
+        warm.upstream.sent_raw().contains("田中町"),
+        "the town name must reach the upstream unmasked"
+    );
+
+    // Same body, no history: the verdict must not depend on the session.
+    let fresh = start_with(config, MockKind::Echo).await;
+    let response = fresh.post_json("/v1/chat/completions", review).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(fresh.upstream.sent(), warm.upstream.sent());
+}
+
+#[tokio::test]
+async fn short_value_in_metadata_is_not_a_leak() {
+    let h = start_with_dict(&[("出口", "person")]).await;
+    let mut body = chat_body("よろしくお願いします。");
+    body["metadata"] = json!({"出口": "note"});
+    body["stop"] = json!(["出口"]);
+    let response = h.post_json("/v1/chat/completions", body).await;
+    assert_eq!(response.status(), 200);
+    assert!(h.upstream.last().is_some());
+}
+
+#[tokio::test]
+async fn short_value_is_still_blocked_in_body_text() {
+    use mask::gateway::config::GatewayConfig;
+    let config = GatewayConfig {
+        use_ner: true,
+        ..base_config()
+    };
+    let h = start_with(config, MockKind::Echo).await;
+    // 出口 is detected with an honorific (a person)...
+    let response = h
+        .post_json("/v1/chat/completions", chat_body("出口さんに聞く。"))
+        .await;
+    assert_eq!(response.status(), 200);
+    // ...and the everyday word in body text is still a re-mention: fail closed.
+    let response = h
+        .post_json("/v1/chat/completions", chat_body("出口で待っています。"))
+        .await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["error"]["code"],
+        "mask_leak_blocked"
+    );
+    assert!(
+        !h.upstream.sent_raw().contains("出口で待っています"),
+        "the blocked request reached the upstream"
+    );
+}
+
 // --- tool_calls masking ------------------------------------------------------
 
 #[tokio::test]

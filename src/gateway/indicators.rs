@@ -32,6 +32,7 @@ pub enum Count {
     TokensUnresolved,
     LeakBlocks,
     LeakWarnings,
+    LeakFalsePositives,
     PathsDenied,
     AuthDenied,
     StreamRequests,
@@ -45,7 +46,7 @@ pub enum Count {
 }
 
 impl Count {
-    pub const ALL: [Count; 18] = [
+    pub const ALL: [Count; 19] = [
         Count::RequestsTotal,
         Count::RequestsBlocked,
         Count::EntitiesMasked,
@@ -54,6 +55,7 @@ impl Count {
         Count::TokensUnresolved,
         Count::LeakBlocks,
         Count::LeakWarnings,
+        Count::LeakFalsePositives,
         Count::PathsDenied,
         Count::AuthDenied,
         Count::StreamRequests,
@@ -76,6 +78,7 @@ impl Count {
             Count::TokensUnresolved => "tokens_unresolved",
             Count::LeakBlocks => "leak_blocks",
             Count::LeakWarnings => "leak_warnings",
+            Count::LeakFalsePositives => "leak_false_positives",
             Count::PathsDenied => "paths_denied",
             Count::AuthDenied => "auth_denied",
             Count::StreamRequests => "stream_requests",
@@ -101,7 +104,7 @@ impl Count {
 #[derive(Debug)]
 pub struct Indicators {
     started_at: Instant,
-    values: [AtomicU64; 18],
+    values: [AtomicU64; 19],
 }
 
 impl Default for Indicators {

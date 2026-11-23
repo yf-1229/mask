@@ -295,6 +295,10 @@ pub fn create_app(config: GatewayConfig, client: Option<reqwest::Client>) -> Rou
         .route("/admin/export", post(admin_export))
         .route("/admin/import", post(admin_import))
         .route("/admin/dictionary/reload", post(admin_dictionary_reload))
+        .route(
+            "/admin/leak/false-positive",
+            post(admin_leak_false_positive),
+        )
         .fallback(passthrough)
         .with_state(state)
 }
@@ -1459,6 +1463,26 @@ async fn admin_dictionary_reload(State(state): State<AppState>, request: Request
             "terms": report.terms,
         }),
     )
+}
+
+/// Count a leak-gate block the operator judged wrong.
+///
+/// Only a human can know a block was a false positive, so this is a manual
+/// counter, not an inference: the operator sees a block, decides it was wrong,
+/// and bumps `leak_false_positives` through the same admin gate as every other
+/// operator action. `/status` publishes the running total with the other
+/// counts.
+async fn admin_leak_false_positive(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(denied) = admin_authorized(&state, &request) {
+        return denied;
+    }
+    state.indicators.incr(Count::LeakFalsePositives);
+    let total = state.indicators.get(Count::LeakFalsePositives);
+    tracing::info!(
+        leak_false_positives = total,
+        "operator counted a false block"
+    );
+    json_response(StatusCode::OK, json!({"leak_false_positives": total}))
 }
 
 fn blocked_status(response: &Response) -> StatusCode {
