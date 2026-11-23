@@ -1,0 +1,14 @@
+# Ambiguous surnames: everyday words, place components or adverbs that happen
+# to be surnames (`出口` is an exit before it is a family name). They stay in
+# `surnames.txt` so `出口さん` and `氏名: 出口` are still masked, but a bare
+# particle is not enough — 「出口は混んでいる」 is about an exit, not a person.
+# One entry per line; `#` comments and blanks ignored. Data, not code.
+#
+# Keep this list disjoint from nothing: an entry that is not in `surnames.txt`
+# is inert (the detector only consults it for a surname match). `根本` is here
+# ahead of the lexicon because 「根本的に」 is the failure the issue names.
+出口
+大川
+小野
+田中
+根本

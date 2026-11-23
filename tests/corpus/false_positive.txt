@@ -1,0 +1,58 @@
+# False-positive corpus: spans that MUST NOT be masked. Data, not code.
+#
+# `src/detect/surnames.txt` requires one case here per lexicon addition: a
+# surname that collides with an everyday word is only reviewed once the bad
+# direction is pinned. `text:` is required, then one `must_not: <value>` line
+# per span that would be a false positive. The tests read this file at compile
+# time (`include_str!`), so a case added here is exercised on the next
+# `cargo test`.
+#
+# The values are everyday words, not PII: this file is safe to commit.
+
+# case: exit_is_crowded
+text: 出口は混んでいる。
+must_not: 出口
+
+# case: root_is_an_adverb
+text: 根本的に違う考えだ。
+must_not: 根本
+
+# case: tanaka_is_a_town
+text: 田中町に住む。
+must_not: 田中
+
+# case: river_side_walk
+text: 大川沿いを散歩した。
+must_not: 大川
+
+# case: mountain_river_view
+text: 山川の景色がきれいだ。
+must_not: 山川
+
+# case: nakamura_street
+text: 中村通りを歩く。
+must_not: 中村
+
+# case: yamashita_park
+text: 山下公園に行く。
+must_not: 山下
+
+# case: waiting_at_the_exit
+text: 出口で待っています。
+must_not: 出口
+
+# case: river_water
+text: 大川の水は冷たい。
+must_not: 大川
+
+# case: tanaka_station
+text: 田中駅で降りる。
+must_not: 田中
+
+# case: ogawa_city
+text: 大川市に住んでいる。
+must_not: 大川
+
+# case: nakamura_ward_office
+text: 中村区役所まで行く。
+must_not: 中村

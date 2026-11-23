@@ -170,6 +170,8 @@ fn account_keyword_re() -> Regex {
 }
 
 struct Rule {
+    /// Stable label for `--explain`; the pattern itself is not printable.
+    name: &'static str,
     kind: EntityType,
     regex: Regex,
     /// Span comes from capture group 1 (the keyword itself is not replaced).
@@ -182,6 +184,7 @@ fn rules() -> &'static Vec<Rule> {
     static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         vec![
             Rule {
+                name: "email",
                 kind: EntityType::Email,
                 regex: email_re(),
                 group_one: false,
@@ -189,6 +192,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: None,
             },
             Rule {
+                name: "phone",
                 kind: EntityType::Phone,
                 regex: phone_re(),
                 group_one: false,
@@ -196,6 +200,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_no_digit),
             },
             Rule {
+                name: "address",
                 kind: EntityType::Address,
                 regex: address_re(),
                 group_one: false,
@@ -203,6 +208,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: None,
             },
             Rule {
+                name: "organization prefix",
                 kind: EntityType::Org,
                 regex: org_prefix_re(),
                 group_one: false,
@@ -210,6 +216,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: None,
             },
             Rule {
+                name: "organization suffix",
                 kind: EntityType::Org,
                 regex: org_suffix_re(),
                 group_one: false,
@@ -217,6 +224,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: None,
             },
             Rule {
+                name: "bank account",
                 kind: EntityType::Account,
                 regex: bank_account_re(),
                 group_one: false,
@@ -224,6 +232,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_no_digit),
             },
             Rule {
+                name: "card number",
                 kind: EntityType::Card,
                 regex: card_re(),
                 group_one: false,
@@ -231,6 +240,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_no_digit),
             },
             Rule {
+                name: "account number",
                 kind: EntityType::Account,
                 regex: mynumber_re(),
                 group_one: false,
@@ -238,6 +248,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_no_digit),
             },
             Rule {
+                name: "account keyword",
                 kind: EntityType::Account,
                 regex: account_keyword_re(),
                 group_one: true,
@@ -245,6 +256,7 @@ fn rules() -> &'static Vec<Rule> {
                 right: Some(guard_keyword_right),
             },
             Rule {
+                name: "card keyword",
                 kind: EntityType::Card,
                 regex: card_keyword_re(),
                 group_one: true,
@@ -274,7 +286,16 @@ fn passes(guard: Option<Guard>, c: Option<char>) -> bool {
 
 /// Run all structural rules over `text` and return entities.
 pub fn run_rule_detection(text: &str) -> Vec<Entity> {
-    let mut entities: Vec<Entity> = Vec::new();
+    run_rule_detection_explained(text)
+        .into_iter()
+        .map(|(entity, _)| entity)
+        .collect()
+}
+
+/// Like [`run_rule_detection`], with the rule name that accepted each span.
+/// `--explain` uses it; detection itself ignores the reason.
+pub fn run_rule_detection_explained(text: &str) -> Vec<(Entity, &'static str)> {
+    let mut entities: Vec<(Entity, &'static str)> = Vec::new();
     for rule in rules() {
         for m in rule.regex.find_iter(text) {
             let mut start = m.start();
@@ -302,13 +323,9 @@ pub fn run_rule_detection(text: &str) -> Vec<Entity> {
             if !passes(rule.right, next_char(text, end)) {
                 continue;
             }
-            entities.push(Entity::new(
-                rule.kind,
-                start,
-                end,
-                raw,
-                BAND_EXACT,
-                Source::Rule,
+            entities.push((
+                Entity::new(rule.kind, start, end, raw, BAND_EXACT, Source::Rule),
+                rule.name,
             ));
         }
     }
