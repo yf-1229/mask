@@ -372,6 +372,60 @@ async fn tool_call_arguments_are_masked() {
     assert_eq!(parsed["note"], "よろしく");
 }
 
+// --- tool_calls restoration --------------------------------------------------
+
+#[tokio::test]
+async fn tool_call_arguments_are_restored_in_streamed_response() {
+    let h = start_with_dict_kind(MockKind::StreamToolCalls).await;
+    let mut body = chat_body("山田太郎さんの件");
+    body["stream"] = json!(true);
+    let response = h.post_json("/v1/chat/completions", body).await;
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    let arguments: String = streamed_json(&text)
+        .iter()
+        .filter_map(|chunk| {
+            chunk
+                .pointer("/choices/0/delta/tool_calls/0/function/arguments")
+                .and_then(Value::as_str)
+        })
+        .collect();
+    assert!(
+        !arguments.contains('⟦'),
+        "token leaked to client: {arguments}"
+    );
+    let parsed: Value = serde_json::from_str(&arguments).unwrap();
+    assert_eq!(parsed["who"], "山田太郎", "{arguments}");
+    assert_eq!(parsed["note"], "折返し", "{arguments}");
+}
+
+#[tokio::test]
+async fn tool_call_arguments_are_restored_in_non_streamed_response() {
+    let h = start_with_dict_kind(MockKind::Agent).await;
+    let response = h
+        .post_json(
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt",
+                "messages": [{"role": "user", "content": "山田太郎さんの件"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+            }),
+        )
+        .await;
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    let arguments = body
+        .pointer("/choices/0/message/tool_calls/0/function/arguments")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("no arguments in {body}"));
+    assert!(
+        !arguments.contains('⟦'),
+        "token leaked to client: {arguments}"
+    );
+    let parsed: Value = serde_json::from_str(arguments).unwrap();
+    assert_eq!(parsed["who"], "山田太郎", "{arguments}");
+}
+
 // --- deny-by-default passthrough ---------------------------------------------
 
 #[tokio::test]

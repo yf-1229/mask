@@ -152,6 +152,9 @@ Windows, macOS and Linux.
   charged and an account drained, and the token tells the model which
 - NFKC normalization so full-width and half-width variants fold onto the same
   entity
+- Containment is not unification: `田中` and `田中町` are separate entities with
+  separate tokens, and each token restores to its own raw value (a shorter
+  value is never restored as a longer one, in either detection order)
 - Replacement with opaque, type-tagged tokens (`⟦人名7⟧`) and restoration of the
   response, including fuzzy repair of corrupted tokens
 - Session scopes: `global` (stable pseudonyms across a conversation) and
@@ -167,6 +170,10 @@ Windows, macOS and Linux.
   upstream to completion. A token split across SSE chunks is held in a tail
   buffer until complete; EOF flushes it and emits `finish_reason` /
   `message_stop`
+- `tool_calls[*].function.arguments` are restored on both entrances and on both
+  the streamed and non-streamed paths; the OpenAI-facing string form is parsed,
+  its strings restored and re-serialized, and arguments that are not valid JSON
+  are forwarded byte-for-byte with a warning
 - Deny-by-default routing: only supported endpoints and
   `gateway.passthrough_allowlist` paths are forwarded; everything else is 403
 - A session binds pseudonyms for at most `session.capacity` entities (default
