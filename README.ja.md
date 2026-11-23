@@ -37,7 +37,7 @@ English README: [README.md](README.md) ／ 公式サイト: **https://mask.branc
 |---|---|---|
 | プロキシ (OpenAI互換) | OpenAI 系ハーネス/エージェント | `base URL = http://127.0.0.1:8080/v1` |
 | プロキシ (Anthropic互換) | Claude Code など | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`、`ANTHROPIC_API_KEY=<gateway.token>` |
-| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask dict` / `mask serve` |
+| シェル (CLI) | 人間 | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask session` / `mask dict` / `mask serve` |
 
 ### Anthropic 互換入口 (`/v1/messages`)
 
@@ -63,6 +63,8 @@ mask check "090-1234-5678 です"       # 事前確認: 何がマスクされる
 mask audit notes.md                   # 文書をまとめて点検 (取りこぼし候補を行番号で)
 mask status                           # 信頼性インジケータパネル
 mask status --json                    # /status の生スナップショット
+mask session                          # このセッションで何をマスクしたか (既定はハッシュ)
+mask session --values                 # …実値つき (ローカル stdout のみ)
 mask dict add 山田太郎                 # 用語を登録 (稼働中のゲートウェイが即座に拾う)
 mask dict list                        # 登録済みの用語 (用語<TAB>タイプ)
 mask dict check                       # ファイル検証 (件数と行番号のみ)
@@ -88,6 +90,25 @@ mask serve                            # ゲートウェイ起動
   ありません**。
   `dict check` は読み飛ばされた行を番号だけで報告するので、タイプミスが
   再現率の静かな低下にならず、その場で失敗します
+- `session` は「このセッションで何がマスクされたか」をゲートウェイの生きた
+  対応表から答えます。読むのは `GET /admin/session` で、export/import と同じ
+  オペレータトークンと loopback クライアントだけを受け付けます (`/status` は
+  従来どおり数値のみ)。実値は既定では sha256 接頭辞で、`--values` を明示した
+  ときだけ stdout に出ます (ログと `/status` には出ません)。長いセルは
+  `--full` まで切り詰め、`--json` は同じ内容を `jq` 向けに出します。
+  `--admin-token` はゲートウェイの端末に表示されたトークンです:
+
+  ```
+  $ mask session --admin-token "<ゲートウェイ端末のトークン>"
+  mask session — global  (2 entities, 3 occurrences · id pool 254/256 left)
+    kind    token        occurrences  value
+    person  ⟦人名17⟧   2            sha256:1a2b3c4d
+    phone   ⟦電話201⟧  1            sha256:9f8e7d6c
+  ```
+
+  JSON の `remaining` / `capacity` (表の "id pool … left") は `SessionFull` が
+  失敗するのと同じプールなので、mask#10 のトークン枯渇をリクエストが拒否される
+  前に確認できます
 - API キー Spoofing の心配なし: CLI は `gateway.token` を Bearer に使うだけ
 
 ## 信頼性インジケータ

@@ -75,7 +75,7 @@ const TITLES_AFTER_VALUE: &[&str] = &["市長", "区長", "町長", "村長", "�
 /// Bytes of sha256 shown in paths and value prefixes (8 hex chars).
 const HASH_PREFIX_BYTES: usize = 4;
 
-fn hash_prefix(bytes: &[u8]) -> String {
+pub(crate) fn hash_prefix(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .take(HASH_PREFIX_BYTES)

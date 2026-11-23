@@ -8,6 +8,7 @@
 //! mask audit FILE     # dry-run over files, plus likely-miss line numbers
 //! mask chat '...'     # one prompt, through the gateway, restored answer
 //! mask status         # reliability indicator panel of a running gateway
+//! mask session        # what this session masked (hashes by default)
 //! mask dict add ...   # register a term; a running gateway picks it up live
 //! mask serve          # start the gateway
 //! ```
@@ -129,6 +130,26 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// what this session has masked (reads the gateway's live table)
+    Session {
+        /// gateway base URL (default: config server host/port)
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long, default_value_t = 5.0)]
+        timeout: f64,
+        /// raw /admin/session JSON (jq-friendly)
+        #[arg(long)]
+        json: bool,
+        /// do not truncate long tokens/values
+        #[arg(long)]
+        full: bool,
+        /// print raw values instead of sha256 prefixes (stdout only)
+        #[arg(long)]
+        values: bool,
+        /// operator token printed on the gateway's terminal
+        #[arg(long)]
+        admin_token: Option<String>,
+    },
     /// start the gateway (same as `mask-server`)
     #[command(alias = "server")]
     Serve {
@@ -212,6 +233,26 @@ async fn run(cli: Cli) -> Result<i32> {
         } => cmd_chat(&text, &config, &model, url.as_deref(), timeout, colorize).await,
         Command::Status { url, timeout, json } => {
             cmd_status(&config, url.as_deref(), timeout, json, colorize).await
+        }
+        Command::Session {
+            url,
+            timeout,
+            json,
+            full,
+            values,
+            admin_token,
+        } => {
+            cmd_session(
+                &config,
+                url.as_deref(),
+                timeout,
+                json,
+                full,
+                values,
+                admin_token.as_deref(),
+                colorize,
+            )
+            .await
         }
         Command::Serve { .. } => unreachable!("handled above"),
     }
@@ -474,6 +515,173 @@ pub fn render_status(snapshot: &Value, colorize: bool) -> String {
             "  {:<16}{}",
             "repaired tokens",
             paint(&repaired.to_string(), YELLOW, colorize)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Longest cell `mask session` prints before `--full` (terminal cells).
+const SESSION_CELL_WIDTH: usize = 24;
+
+/// Terminal cells, approximated: CJK and most emoji take two.
+/// ponytail: not the full Unicode width table; the wide text here is Japanese
+/// labels and values, which this covers.
+fn char_width(c: char) -> usize {
+    if c as u32 >= 0x1100 {
+        2
+    } else {
+        1
+    }
+}
+
+fn cell_width(text: &str) -> usize {
+    text.chars().map(char_width).sum()
+}
+
+fn truncate_cell(text: &str, full: bool) -> String {
+    if full || cell_width(text) <= SESSION_CELL_WIDTH {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in text.chars() {
+        let w = char_width(ch);
+        if width + w > SESSION_CELL_WIDTH {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+        width += w;
+    }
+    out
+}
+
+fn pad_cell(text: &str, width: usize) -> String {
+    format!(
+        "{text}{}",
+        " ".repeat(width.saturating_sub(cell_width(text)))
+    )
+}
+
+/// Table for `mask session` (pure; the gateway's `/admin/session` snapshot).
+///
+/// `value_sha256_prefix` is the default because a terminal may be shared or
+/// scrolled back; `--values` is the same opt-in shape as `check --explain`.
+pub fn render_session(snapshot: &Value, full: bool, values: bool, colorize: bool) -> String {
+    let scope = snapshot
+        .get("session_scope")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    if scope == "request" {
+        return format!(
+            "mask session — request  {}\n  nothing persists between requests; set session.scope = \"global\" to inspect a session",
+            paint("(empty by design)", DIM, colorize)
+        );
+    }
+    let records = snapshot.get("records").and_then(Value::as_u64).unwrap_or(0);
+    let total = snapshot
+        .get("total_occurrences")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let capacity = snapshot
+        .get("capacity")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let remaining = snapshot
+        .get("remaining")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut lines = vec![format!(
+        "{} {}  ({} {}, {} {} · id pool {}/{} left)",
+        paint("mask session —", BOLD, colorize),
+        scope,
+        records,
+        if records == 1 { "entity" } else { "entities" },
+        total,
+        if total == 1 {
+            "occurrence"
+        } else {
+            "occurrences"
+        },
+        remaining,
+        capacity
+    )];
+    let entries = snapshot
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if entries.is_empty() {
+        lines.push("  (nothing masked this session yet)".to_string());
+        return lines.join("\n");
+    }
+    let rows: Vec<(String, String, String, String)> = entries
+        .iter()
+        .map(|entry| {
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("?");
+            let token = entry.get("token").and_then(Value::as_str).unwrap_or("?");
+            let occurrences = entry
+                .get("occurrences")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .to_string();
+            let value: String = if values {
+                entry
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("—")
+                    .to_string()
+            } else {
+                match entry.get("value_sha256_prefix").and_then(Value::as_str) {
+                    Some(hash) => format!("sha256:{hash}"),
+                    None => "—".to_string(),
+                }
+            };
+            (
+                truncate_cell(kind, full),
+                truncate_cell(token, full),
+                occurrences,
+                truncate_cell(&value, full),
+            )
+        })
+        .collect();
+    let kind_w = rows
+        .iter()
+        .map(|r| cell_width(&r.0))
+        .chain([cell_width("kind")])
+        .max()
+        .unwrap_or(4);
+    let token_w = rows
+        .iter()
+        .map(|r| cell_width(&r.1))
+        .chain([cell_width("token")])
+        .max()
+        .unwrap_or(5);
+    let occ_w = rows
+        .iter()
+        .map(|r| r.2.len())
+        .chain([cell_width("occurrences")])
+        .max()
+        .unwrap_or(11);
+    lines.push(format!(
+        "  {}  {}  {}  {}",
+        pad_cell("kind", kind_w),
+        pad_cell("token", token_w),
+        pad_cell("occurrences", occ_w),
+        "value"
+    ));
+    for (kind, token, occurrences, value) in rows {
+        let value = if values {
+            value
+        } else {
+            paint(&value, DIM, colorize)
+        };
+        lines.push(format!(
+            "  {}  {}  {}  {}",
+            pad_cell(&kind, kind_w),
+            pad_cell(&token, token_w),
+            pad_cell(&occurrences, occ_w),
+            value
         ));
     }
     lines.join("\n")
@@ -1013,5 +1221,67 @@ async fn cmd_status(
         return Ok(0);
     }
     println!("{}", render_status(&snapshot, colorize));
+    Ok(0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_session(
+    config: &GatewayConfig,
+    url: Option<&str>,
+    timeout: f64,
+    json: bool,
+    full: bool,
+    values: bool,
+    admin_token: Option<&str>,
+    colorize: bool,
+) -> Result<i32> {
+    let base = gateway_url(config, url);
+    let client = http_client(timeout)?;
+    let mut request = client.get(format!("{base}/admin/session"));
+    if values {
+        request = request.query(&[("values", "true")]);
+    }
+    if !config.gateway_token.is_empty() {
+        request = request.bearer_auth(&config.gateway_token);
+    }
+    if let Some(token) = admin_token {
+        request = request.header("x-mask-admin", token);
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("error: gateway at {base} unreachable ({error})");
+            return Ok(1);
+        }
+    };
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let code = parsed
+            .pointer("/error/code")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let message = parsed
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| body.trim());
+        eprintln!("error: gateway returned {}: {message}", status.as_u16());
+        if matches!(
+            code,
+            "mask_admin_no_human" | "mask_admin_closed" | "mask_admin_disabled"
+        ) {
+            eprintln!(
+                "hint: pass the operator token printed on the gateway's terminal as --admin-token"
+            );
+        }
+        return Ok(1);
+    }
+    let snapshot: Value = serde_json::from_str(&body).context("gateway returned invalid JSON")?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+        return Ok(0);
+    }
+    println!("{}", render_session(&snapshot, full, values, colorize));
     Ok(0)
 }

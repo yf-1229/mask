@@ -206,6 +206,17 @@ impl PseudonymMap {
         self.records.is_empty()
     }
 
+    /// Configured size of the id pool (mask#10's `session.capacity`).
+    pub fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// Ids never bound in this session: what `mask session` reports as the
+    /// remaining pool. Same number `assign` fails against when it reaches 0.
+    pub fn remaining(&self) -> usize {
+        self.pool.len()
+    }
+
     /// Snapshot of the table for the encrypted handoff. Contains raw values by
     /// definition; only ever leaves the process inside a sealed envelope.
     pub fn export_records(&self) -> Vec<ExportRecord> {

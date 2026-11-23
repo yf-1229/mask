@@ -39,7 +39,7 @@ There is no weaker path.
 |---|---|---|
 | Proxy (OpenAI-compatible) | OpenAI-style harnesses and agents | `base URL = http://127.0.0.1:8080/v1` |
 | Proxy (Anthropic-compatible) | Claude Code and similar | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`, `ANTHROPIC_API_KEY=<gateway.token>` |
-| Shell (CLI) | Humans | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask dict` / `mask serve` |
+| Shell (CLI) | Humans | `mask chat` / `mask check` / `mask audit` / `mask status` / `mask session` / `mask dict` / `mask serve` |
 
 ### Anthropic-compatible entrance (`/v1/messages`)
 
@@ -65,6 +65,8 @@ mask check "090-1234-5678"        # dry run: what would be masked (no network)
 mask audit notes.md               # mask files; report likely misses (line numbers)
 mask status                       # reliability indicator panel
 mask status --json                # raw /status snapshot
+mask session                      # what this session masked (hashes only)
+mask session --values             # …with the raw values, local stdout only
 mask dict add 山田太郎             # register a term; a running gateway picks it up
 mask dict list                    # what the gateway knows (term<TAB>type)
 mask dict check                   # validate the file; counts and line numbers
@@ -91,6 +93,26 @@ mask serve                        # start the gateway
   request — no restart, and the in-memory mapping table survives. `dict check`
   reports skipped lines by number only, so a typo fails loudly instead of
   silently shrinking recall
+- `session` answers "what has this session masked?" from the gateway's live
+  table. It reads `GET /admin/session`, which sits behind the same operator
+  token as export/import and answers loopback clients only; `/status` keeps
+  carrying counts, never values. Values are shown as a sha256 prefix unless
+  `--values` is passed (stdout only — logs and `/status` never carry one), long
+  cells are truncated unless `--full` is passed, and `--json` is the same
+  snapshot for `jq`. `--admin-token` is the token printed on the gateway's
+  terminal:
+
+  ```
+  $ mask session --admin-token "<token on the gateway's terminal>"
+  mask session — global  (2 entities, 3 occurrences · id pool 254/256 left)
+    kind    token        occurrences  value
+    person  ⟦人名17⟧   2            sha256:1a2b3c4d
+    phone   ⟦電話201⟧  1            sha256:9f8e7d6c
+  ```
+
+  `remaining`/`capacity` in the JSON (and "id pool … left" in the table) is the
+  same pool `SessionFull` fails against, so token exhaustion from mask#10 is
+  visible before a request is refused
 - No API-key spoofing to worry about: the CLI only uses `gateway.token` as a Bearer
 
 ## How detection works (no model download)
