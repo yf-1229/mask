@@ -273,3 +273,26 @@ async fn dictionary_terms_indicator_counts_entries() {
     let status: Value = h.get("/status").await.json().await.unwrap();
     assert_eq!(status["posture"]["dictionary_terms"], 2);
 }
+
+#[tokio::test]
+async fn operator_can_count_leak_false_positives() {
+    let config = GatewayConfig {
+        gateway_token: "tok".to_string(),
+        ..base_config()
+    };
+    let h = start_with(config, MockKind::Echo).await;
+
+    // The counter is an operator action: same admin gate as export/import.
+    let denied = h.post_json("/admin/leak/false-positive", json!({})).await;
+    assert_eq!(denied.status(), 401);
+
+    let ok = h
+        .post_json_auth("/admin/leak/false-positive", json!({}), "tok")
+        .await;
+    assert_eq!(ok.status(), 200);
+    let body: Value = ok.json().await.unwrap();
+    assert_eq!(body["leak_false_positives"], 1);
+
+    let status: Value = h.get_auth("/status", "tok").await.json().await.unwrap();
+    assert_eq!(status["counts"]["leak_false_positives"], 1);
+}

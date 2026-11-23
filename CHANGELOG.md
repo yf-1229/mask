@@ -176,6 +176,14 @@ Windows, macOS and Linux.
 - Pre-flight leak gate: the whole payload and forwarded headers are walked
   before sending; any real value the session has detected discards the request
   (fail-closed)
+- Leak-gate matching is whole-word: a value inside a longer word is not a
+  re-mention (`田中` in `田中町`, `東京` in `東京都`; titles such as `山田市長`
+  still block), ASCII values must match whole tokens, and a two-character value
+  is judged in request body text only — keys, headers and metadata fields
+  (`model`, `stop`, `metadata`) no longer cause false blocks
+- `POST /admin/leak/false-positive` (operator token, loopback) counts a
+  leak-gate block a human judged wrong; `leak_false_positives` joins the
+  `/status` counters
 - Gateway token authentication on both entrances, constant-time comparison
 - Leak-gate logs and block responses carry hashed paths (`key#<sha256-prefix>`)
   and value hash prefixes only — never values or raw object keys; the raw-value

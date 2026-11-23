@@ -53,7 +53,11 @@ For a value the session has **detected**:
 
 - it does not leave the machine through any field, path or header of a
   forwarded request — the pre-flight leak gate discards the request instead
-  (fail-closed)
+  (fail-closed). Matching is whole-word: a value inside a longer word is not a
+  re-mention (`田中` in `田中町`), and a two-character value is judged in
+  request body text only, never in keys, headers or metadata fields (the
+  precision trade from issue #15; false blocks are counted manually as
+  `leak_false_positives`)
 - it is not written to logs (field paths and sha256 digests only)
 - it is not present in the mapping table's transport: handoff envelopes are
   ciphertext (argon2id + XSalsa20-Poly1305), expire, lock after repeated wrong
@@ -66,7 +70,10 @@ For a value the session has **detected**:
   Without a terminal there is no token, so the admin channel is closed rather
   than open. (A client of the proxy can still resolve *individual* pseudonyms by
   sending them back — that is what restoration is for; what the gate protects is
-  the bulk table, which is the difference between one value and every value)
+  the bulk table, which is the difference between one value and every value).
+  `POST /admin/leak/false-positive` uses the same admin gate: it increments the
+  `leak_false_positives` counter after a human judged a block wrong, so the
+  gate's precision is measurable instead of argued about
 
 These are enforced structurally and covered by tests, including a canary suite
 that asserts no known PII appears in any byte a mock upstream received.
